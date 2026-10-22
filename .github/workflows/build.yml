@@ -1,0 +1,64 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build archive (unsigned)
+        run: |
+          xcodebuild archive \
+            -scheme PurpleKit \
+            -configuration Release \
+            -archivePath build/PurpleKit.xcarchive \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            | xcpretty || true
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/PurpleKit.xcarchive/Products/Applications/PurpleKit.app Payload/
+          zip -r PurpleKit.ipa Payload
+          ls -la PurpleKit.ipa
+          unzip -l PurpleKit.ipa | head -20
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PurpleKit-ipa
+          path: PurpleKit.ipa
+          retention-days: 30
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: latest
+          name: Latest Build
+          body: "Unsigned IPA for AltStore / SideStore / Sideloadly. Install with your free Apple ID."
+          files: PurpleKit.ipa
+          draft: false
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
