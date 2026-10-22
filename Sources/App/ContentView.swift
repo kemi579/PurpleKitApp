@@ -19,13 +19,10 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         header
-
                         searchBar
-
                         if !registry.favoriteTools().isEmpty && searchText.isEmpty && !showFavoritesOnly {
                             favoritesSection
                         }
-
                         if showFavoritesOnly {
                             favoritesOnlySection
                         } else if searchText.isEmpty {
@@ -39,8 +36,10 @@ struct ContentView: View {
                 }
             }
             .navigationBarHidden(true)
-            .navigationDestination(item: $selectedTool) { tool in
-                ToolDetailView(tool: tool)
+            .sheet(item: $selectedTool) { tool in
+                NavigationStack {
+                    ToolDetailView(tool: tool)
+                }
             }
         }
     }
@@ -79,9 +78,7 @@ struct ContentView: View {
                 .foregroundColor(Theme.textPrimary)
                 .autocorrectionDisabled()
             if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
+                Button { searchText = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(Theme.textSecondary)
                 }
@@ -175,11 +172,9 @@ struct ToolDetailView: View {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .semibold))
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(Theme.primaryLight)
                     }
                     Spacer()
@@ -206,10 +201,6 @@ struct ToolDetailView: View {
 }
 
 extension AnyTool: Hashable {
-    static func == (lhs: AnyTool, rhs: AnyTool) -> Bool {
-        lhs.id == rhs.id
-    }
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
+    static func == (lhs: AnyTool, rhs: AnyTool) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
