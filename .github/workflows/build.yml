@@ -23,6 +23,7 @@ jobs:
 
       - name: Build archive (unsigned)
         run: |
+          set -euo pipefail
           xcodebuild archive \
             -scheme PurpleKit \
             -configuration Release \
@@ -31,16 +32,16 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            | xcpretty || true
+            DEVELOPMENT_TEAM=""
 
       - name: Package IPA
         run: |
+          set -euo pipefail
+          test -d build/PurpleKit.xcarchive/Products/Applications/PurpleKit.app
           mkdir -p Payload
           cp -r build/PurpleKit.xcarchive/Products/Applications/PurpleKit.app Payload/
           zip -r PurpleKit.ipa Payload
           ls -la PurpleKit.ipa
-          unzip -l PurpleKit.ipa | head -20
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
