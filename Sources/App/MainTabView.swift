@@ -2,28 +2,21 @@ import SwiftUI
 
 struct MainTabView: View {
     @State private var tab = 0
-    @EnvironmentObject var registry: ToolRegistry
     @StateObject private var certs = CertificateStore.shared
 
     var body: some View {
         TabView(selection: $tab) {
-            HomeView()
-                .tabItem {
-                    Label("Home", systemImage: "square.grid.2x2.fill")
-                }
-                .tag(0)
-
             AppsView()
                 .tabItem {
                     Label("Apps", systemImage: "app.badge.fill")
                 }
-                .tag(1)
+                .tag(0)
 
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gearshape.fill")
                 }
-                .tag(2)
+                .tag(1)
         }
         .tint(Theme.primaryLight)
         .environmentObject(certs)
