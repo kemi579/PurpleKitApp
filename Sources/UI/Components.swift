@@ -111,18 +111,22 @@ struct PurpleButton: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(background)
+            .background(buttonBackground)
             .foregroundColor(.white)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
     }
 
-    private var background: some View {
+    @ViewBuilder
+    private var buttonBackground: some View {
         switch style {
-        case .primary: Theme.primaryGradient
-        case .secondary: Theme.surfaceElevated
-        case .danger: Color(hex: "F87171").opacity(0.8)
+        case .primary:
+            Theme.primaryGradient
+        case .secondary:
+            Theme.surfaceElevated
+        case .danger:
+            Color(hex: "F87171").opacity(0.8)
         }
     }
 }
