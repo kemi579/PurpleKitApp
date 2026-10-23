@@ -13,7 +13,8 @@ This document distinguishes implemented behavior from planned behavior. A succes
 - Rounded floating glass bottom navigation for Apps and Settings, with an animated selected state and SwiftUI's native tab bar hidden.
 - IPA Library screen with multi-select `.ipa` import through the Files picker, app-sandbox storage, duplicate-name protection, file-size display, reload from disk, and delete confirmation.
 - Honest scope messaging: imported packages are stored only; no IPA extraction, signature verification, signing, pairing, or installation is claimed.
-- Pull-request CI that generates the Xcode project, archives without signing, packages an IPA, and checks for `Payload/PurpleKit.app/Info.plist`.
+- XcodeGen project configuration migrated from Swift 5.9 / Xcode 15 to Swift 6 / Xcode 16, with complete strict-concurrency checking requested.
+- Pull-request CI verifies the Swift 6 toolchain, generates the Xcode project, archives without signing, packages an IPA, and checks for `Payload/PurpleKit.app/Info.plist`. CI must pass on the migrated head before this migration is considered validated.
 
 ## Not implemented yet
 
@@ -26,8 +27,8 @@ This document distinguishes implemented behavior from planned behavior. A succes
 
 ## Next implementation sequence
 
-1. Confirm the project's license strategy before linking SideSign (its upstream package declares GPL-3.0).
-2. Select a compatible authentication implementation and pin exact dependency revisions.
+1. Confirm the project's license strategy before linking SideSign (its upstream package declares GPL-3.0). Swift 6 project settings are now switched on the feature branch, but compilation and strict-concurrency fixes remain gated on CI.
+2. Validate the Swift 6 migration in CI, then select a compatible authentication implementation and pin exact dependency revisions.
 3. Add an Anisette provider with explicit trust and error handling.
 4. Add an Apple ID sign-in form that never persists the password.
 5. Bridge the upstream two-factor verification callback to a dedicated code-entry screen.
