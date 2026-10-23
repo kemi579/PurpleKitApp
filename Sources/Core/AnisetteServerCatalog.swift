@@ -1,9 +1,35 @@
 import Foundation
+import Combine
 
 struct AnisetteServer: Codable, Identifiable, Hashable {
-    var name: String
-    var address: String
+    let name: String
+    let address: String
     var id: String { address }
+
+    init(name: String, address: String) {
+        self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, address, url
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        if let address = try container.decodeIfPresent(String.self, forKey: .address) {
+            self.address = address
+        } else {
+            self.address = try container.decode(String.self, forKey: .url)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(address, forKey: .address)
+    }
 }
 
 @MainActor
@@ -24,7 +50,7 @@ final class AnisetteServerCatalog: ObservableObject {
         sourceURL = UserDefaults.standard.string(forKey: Self.sourceKey) ?? ""
         if let data = UserDefaults.standard.data(forKey: Self.serversKey),
            let decoded = try? JSONDecoder().decode([AnisetteServer].self, from: data) {
-            servers = decoded
+            servers = Self.validated(decoded)
         }
     }
 
@@ -32,8 +58,10 @@ final class AnisetteServerCatalog: ObservableObject {
         let trimmed = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed),
               url.scheme?.lowercased() == "https",
-              url.host != nil else {
-            lastError = "Enter a valid HTTPS URL to a SideStore-compatible JSON server catalog."
+              url.host != nil,
+              url.user == nil,
+              url.password == nil else {
+            lastError = "Enter a valid HTTPS URL to a JSON catalog. Credentials and non-HTTPS URLs are not accepted."
             return
         }
 
@@ -54,9 +82,8 @@ final class AnisetteServerCatalog: ObservableObject {
             let decoded = try Self.decodeCatalog(data)
             guard !decoded.isEmpty else { throw CatalogError.emptyCatalog }
             servers = decoded
-            if let saved = try? JSONEncoder().encode(decoded) {
-                UserDefaults.standard.set(saved, forKey: Self.serversKey)
-            }
+            let saved = try JSONEncoder().encode(decoded)
+            UserDefaults.standard.set(saved, forKey: Self.serversKey)
         } catch {
             lastError = error.localizedDescription
         }
@@ -64,24 +91,31 @@ final class AnisetteServerCatalog: ObservableObject {
 
     private static func decodeCatalog(_ data: Data) throws -> [AnisetteServer] {
         let decoder = JSONDecoder()
-        let parsed: [AnisetteServer]
+        let candidates: [AnisetteServer]
         if let direct = try? decoder.decode([AnisetteServer].self, from: data) {
-            parsed = direct
+            candidates = direct
         } else if let wrapper = try? decoder.decode(ServerEnvelope.self, from: data) {
-            parsed = wrapper.servers
+            candidates = wrapper.servers
         } else {
             throw CatalogError.invalidJSON
         }
 
+        return validated(candidates)
+    }
+
+    private static func validated(_ candidates: [AnisetteServer]) -> [AnisetteServer] {
         var seen = Set<String>()
-        return parsed.filter { item in
+        return candidates.compactMap { item in
+            let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
             let address = item.address.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let url = URL(string: address),
+            guard !name.isEmpty,
+                  let url = URL(string: address),
                   url.scheme?.lowercased() == "https",
                   url.host != nil,
-                  !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  seen.insert(address).inserted else { return false }
-            return true
+                  url.user == nil,
+                  url.password == nil,
+                  seen.insert(url.absoluteString).inserted else { return nil }
+            return AnisetteServer(name: name, address: url.absoluteString)
         }
     }
 
@@ -97,7 +131,7 @@ final class AnisetteServerCatalog: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .httpStatus(let code): return "Catalog request failed (HTTP \(code))."
-            case .invalidJSON: return "The URL did not return a supported JSON catalog."
+            case .invalidJSON: return "Expected a JSON array of {name,address/url} entries or an object with a servers array."
             case .emptyCatalog: return "The catalog contained no valid HTTPS server entries."
             }
         }
