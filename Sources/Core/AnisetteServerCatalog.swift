@@ -45,9 +45,17 @@ final class AnisetteServerCatalog: ObservableObject {
         didSet { UserDefaults.standard.set(sourceURL, forKey: Self.sourceKey) }
     }
     @Published private(set) var isLoading = false
+    @Published private(set) var checkingServerIDs: Set<String> = []
+    @Published private(set) var serverHealth: [String: ServerHealth] = [:]
     @Published var lastError: String?
 
-    /// Official SideStore community catalog; entries still need live validation.
+    enum ServerHealth: Equatable {
+        case online
+        case httpError(Int)
+        case invalidResponse
+        case unavailable
+    }
+
     private static let defaultSourceURL = "https://servers.sidestore.io/servers.json"
     private static let sourceKey = "PurpleKit.anisetteCatalogSource"
     private static let serversKey = "PurpleKit.anisetteServers"
@@ -80,24 +88,58 @@ final class AnisetteServerCatalog: ObservableObject {
             request.timeoutInterval = 20
             request.cachePolicy = .reloadIgnoringLocalCacheData
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw CatalogError.invalidResponse
-            }
-            guard http.url?.scheme?.lowercased() == "https" else {
-                throw CatalogError.insecureRedirect
-            }
-            guard (200...299).contains(http.statusCode) else {
-                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                throw CatalogError.httpStatus(code)
-            }
+            guard let http = response as? HTTPURLResponse else { throw CatalogError.invalidResponse }
+            guard http.url?.scheme?.lowercased() == "https" else { throw CatalogError.insecureRedirect }
+            guard (200...299).contains(http.statusCode) else { throw CatalogError.httpStatus(http.statusCode) }
 
             let decoded = try Self.decodeCatalog(data)
             guard !decoded.isEmpty else { throw CatalogError.emptyCatalog }
             servers = decoded
+            serverHealth = [:]
             let saved = try JSONEncoder().encode(decoded)
             UserDefaults.standard.set(saved, forKey: Self.serversKey)
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    /// Connectivity probe for the SideStore-compatible v3 client-info endpoint.
+    /// A successful response does not guarantee that a server is trusted or suitable for signing.
+    func checkServer(_ server: AnisetteServer) async {
+        guard !checkingServerIDs.contains(server.id),
+              let baseURL = URL(string: server.address),
+              baseURL.scheme?.lowercased() == "https",
+              baseURL.host != nil,
+              baseURL.user == nil,
+              baseURL.password == nil,
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return }
+
+        checkingServerIDs.insert(server.id)
+        defer { checkingServerIDs.remove(server.id) }
+
+        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.path = "/" + ([basePath, "v3/client_info"].filter { !$0.isEmpty }.joined(separator: "/"))
+        components.query = nil
+        components.fragment = nil
+        guard let probeURL = components.url else {
+            serverHealth[server.id] = .invalidResponse
+            return
+        }
+
+        do {
+            var request = URLRequest(url: probeURL)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 8
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  http.url?.scheme?.lowercased() == "https" else {
+                serverHealth[server.id] = .invalidResponse
+                return
+            }
+            serverHealth[server.id] = http.statusCode == 200 ? .online : .httpError(http.statusCode)
+        } catch {
+            serverHealth[server.id] = .unavailable
         }
     }
 
@@ -111,7 +153,6 @@ final class AnisetteServerCatalog: ObservableObject {
         } else {
             throw CatalogError.invalidJSON
         }
-
         return validated(candidates.filter { !$0.isHidden })
     }
 
@@ -145,10 +186,10 @@ final class AnisetteServerCatalog: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .httpStatus(let code): return "Catalog request failed (HTTP \(code))."
-            case .invalidJSON: return "Expected a JSON array of {name,address/url} entries or an object with a servers array."
+            case .invalidJSON: return "Expected a JSON array or an object with a servers array."
             case .emptyCatalog: return "The catalog contained no valid HTTPS server entries."
             case .invalidResponse: return "The catalog server returned an invalid HTTP response."
-            case .insecureRedirect: return "The catalog redirected to a non-HTTPS URL. Use an HTTPS endpoint that stays on HTTPS."
+            case .insecureRedirect: return "The catalog redirected to a non-HTTPS URL."
             }
         }
     }
