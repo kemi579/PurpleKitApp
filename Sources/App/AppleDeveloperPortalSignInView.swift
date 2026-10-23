@@ -145,7 +145,7 @@ struct AppleDeveloperPortalSignInView: View {
                             .foregroundStyle(Theme.textPrimary)
                             .frame(maxWidth: .infinity)
 
-                        Text("The login and 2FA interface is prepared, but this build does not yet include a real Apple GSA/GrandSlam provider. No credentials are sent or stored.")
+                        Text("Apple Developer authentication is not connected in this build yet. Sign-in is disabled until a verified, license-compatible provider is implemented. Do not enter your Apple ID password here.")
                             .font(.subheadline)
                             .foregroundStyle(Theme.textSecondary)
 
@@ -178,7 +178,7 @@ struct AppleDeveloperPortalSignInView: View {
                                 .foregroundStyle(.white)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
-                            .disabled(model.isBusy || model.appleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.password.isEmpty)
+                            .disabled(!model.canSubmit)
                         }
 
                         statusView
