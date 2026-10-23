@@ -30,9 +30,11 @@ packages:
   SideSign:
     url: https://github.com/SideStore/SideSign.git
     branch: main
+  # minimuxer must be a local package: its Package.swift uses path deps
+  # (Common/, DeviceGateway/). Remote URL + path deps is unsupported by SPM.
+  # CI / local setup clones it into Dependencies/minimuxer before xcodegen.
   Minimuxer:
-    url: https://github.com/SideStore/minimuxer.git
-    branch: develop
+    path: Dependencies/minimuxer
 targets:
   PurpleKit:
     type: application

@@ -1,0 +1,27 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdata/
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+SourcePackages/
+
+# Local minimuxer clone (CI clones it; do not commit the full tree)
+Dependencies/minimuxer/
+
+# macOS
+.DS_Store
+
+# SwiftPM
+.swiftpm/
+Package.resolved
+
+# XcodeGen
+*.xcodeproj/
+*.xcworkspace/

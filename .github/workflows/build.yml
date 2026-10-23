@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,8 +25,6 @@ jobs:
       - name: Select latest available Xcode 16
         run: |
           set -euo pipefail
-          # Do not select the first Xcode_16*.app: it may be an older
-          # point release without the iOS SDK needed by the project.
           XCODE_PATH="$(find /Applications -maxdepth 1 -name 'Xcode_16*.app' -print | sort -V | tail -n 1)"
           if [ -z "$XCODE_PATH" ]; then XCODE_PATH="/Applications/Xcode.app"; fi
           sudo xcode-select -s "$XCODE_PATH"
@@ -37,6 +35,22 @@ jobs:
           xcodebuild -version
           swift --version
           swift --version | grep -E 'Swift version 6\.'
+
+      - name: Clone minimuxer (local path package)
+        run: |
+          set -euo pipefail
+          # SPM cannot fetch minimuxer by URL because Package.swift depends on
+          # local path packages Common/ and DeviceGateway/. Clone the monorepo
+          # so those paths resolve.
+          mkdir -p Dependencies
+          if [ ! -d Dependencies/minimuxer/.git ]; then
+            git clone --depth 1 --branch develop \
+              https://github.com/SideStore/minimuxer.git Dependencies/minimuxer
+          fi
+          ls -la Dependencies/minimuxer
+          test -f Dependencies/minimuxer/Package.swift
+          test -d Dependencies/minimuxer/Common
+          test -d Dependencies/minimuxer/DeviceGateway
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -52,6 +66,7 @@ jobs:
             -configuration Release \
             -archivePath build/PurpleKit.xcarchive \
             -destination "generic/platform=iOS" \
+            -clonedSourcePackagesDirPath SourcePackages \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
