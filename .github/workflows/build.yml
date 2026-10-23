@@ -22,10 +22,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16
+      - name: Select latest available Xcode 16
         run: |
           set -euo pipefail
-          XCODE_PATH="$(find /Applications -maxdepth 1 -name 'Xcode_16*.app' -print -quit)"
+          # Do not select the first Xcode_16*.app: it may be an older
+          # point release without the iOS SDK needed by the project.
+          XCODE_PATH="$(find /Applications -maxdepth 1 -name 'Xcode_16*.app' -print | sort -V | tail -n 1)"
           if [ -z "$XCODE_PATH" ]; then XCODE_PATH="/Applications/Xcode.app"; fi
           sudo xcode-select -s "$XCODE_PATH"
 
