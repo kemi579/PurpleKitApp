@@ -7,24 +7,21 @@ struct AnisetteServerSettingsView: View {
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Anisette servers")
                             .font(.system(size: 26, weight: .bold))
                             .foregroundStyle(Theme.primaryGradient)
-                        Text("Load a server list from a SideStore-compatible JSON catalog. You can use your own HTTPS URL.")
+                        Text("Load a server list from a SideStore-compatible JSON catalog. The default is SideStore's public community catalog; you can also use your own HTTPS URL.")
                             .font(.subheadline)
                             .foregroundColor(Theme.textSecondary)
                     }
-
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Catalog URL")
                             .font(.headline)
                             .foregroundColor(Theme.textPrimary)
-
-                        TextField("https://example.com/anisette-servers.json", text: $catalog.sourceURL, axis: .vertical)
+                        TextField("https://servers.sidestore.io/servers.json", text: $catalog.sourceURL, axis: .vertical)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
@@ -33,13 +30,11 @@ struct AnisetteServerSettingsView: View {
                             .padding(12)
                             .background(Theme.surfaceElevated)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
-
                         PurpleButton(title: catalog.isLoading ? "Loading catalog…" : "Load / refresh catalog", icon: "arrow.clockwise") {
                             sourceFocused = false
                             Task { await catalog.refresh() }
                         }
                         .disabled(catalog.isLoading)
-
                         if let error = catalog.lastError {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
                                 .font(.caption)
@@ -50,7 +45,6 @@ struct AnisetteServerSettingsView: View {
                     .padding(16)
                     .background(Theme.cardGradient)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text("Catalog entries")
@@ -61,14 +55,9 @@ struct AnisetteServerSettingsView: View {
                                 .font(.caption.monospacedDigit())
                                 .foregroundColor(Theme.textSecondary)
                         }
-
                         if catalog.servers.isEmpty {
-                            EmptyStateView(
-                                icon: "server.rack",
-                                title: "No catalog loaded",
-                                message: "Enter a trusted catalog URL above and load it. No server addresses are hard-coded."
-                            )
-                            .padding(.vertical, 8)
+                            EmptyStateView(icon: "server.rack", title: "No catalog loaded", message: "Load the default SideStore catalog or enter another trusted HTTPS catalog URL.")
+                                .padding(.vertical, 8)
                         } else {
                             ForEach(catalog.servers) { server in
                                 VStack(alignment: .leading, spacing: 5) {
@@ -91,8 +80,7 @@ struct AnisetteServerSettingsView: View {
                     .padding(16)
                     .background(Theme.surfaceElevated)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                    Label("Security: only HTTPS catalog and server URLs are accepted. A catalog is not proof that its servers are online or trustworthy. This screen configures the list only; Apple ID authentication, signing and installation are not implemented yet.", systemImage: "info.circle")
+                    Label("Security: only HTTPS catalog and server URLs are accepted. Catalog entries are not proof that a server is online or trustworthy. This screen configures the list only; Apple ID authentication, signing and installation are not implemented yet.", systemImage: "info.circle")
                         .font(.caption)
                         .foregroundColor(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
