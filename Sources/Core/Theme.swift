@@ -59,6 +59,7 @@ enum Theme {
     )
 }
 
+@MainActor
 struct Haptic {
     static func light() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
