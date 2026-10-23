@@ -5,11 +5,11 @@ import SideSign
 /// Multi-step 2FA UI state driven by SideSign verification callbacks.
 enum TwoFactorPhase: Equatable {
     case none
-    /// Pick trusted device / SMS / voice and request the code.
+    /// User must pick SMS/voice (rare). Trusted device is auto-requested.
     case chooseMethod
-    /// Waiting after user tapped "Send / Approve".
+    /// Waiting while system Apple prompt is on screen — no modal.
     case waitingForDelivery
-    /// Enter the 6-digit code (sheet re-presented after request).
+    /// Enter the 6-digit code only (our sheet).
     case enterCode
 }
 
@@ -80,8 +80,10 @@ final class SideSignAppleAccountProvider: ObservableObject {
         validAnisetteURL != nil
     }
 
+    /// Only show our UI when the user must type a code or pick SMS/voice.
+    /// Never block the screen while waiting for the system Apple prompt.
     var showTwoFactorSheet: Bool {
-        twoFactorPhase != .none
+        twoFactorPhase == .enterCode || twoFactorPhase == .chooseMethod
     }
 
     private var validAnisetteURL: URL? {
@@ -100,6 +102,7 @@ final class SideSignAppleAccountProvider: ObservableObject {
         }
         isBusy = true
         status = "Fetching Anisette data…"
+        twoFactorPhase = .none
         defer {
             isBusy = false
             password = ""
@@ -124,6 +127,7 @@ final class SideSignAppleAccountProvider: ObservableObject {
             )
             authSession = result
             account = result.account
+            twoFactorPhase = .none
             try KeychainVault.save(Data(appleID.trimmingCharacters(in: .whitespacesAndNewlines).utf8), account: "apple-id-email")
             try KeychainVault.save(try JSONEncoder().encode(result), account: "sidesign-auth-session")
             CertificateStore.shared.applyAuthenticatedSession(
@@ -137,17 +141,21 @@ final class SideSignAppleAccountProvider: ObservableObject {
             authSession = nil
             account = nil
             teams = []
+            twoFactorPhase = .none
             try? KeychainVault.delete(account: "sidesign-auth-session")
             CertificateStore.shared.logout()
         }
     }
 
-    // MARK: - 2FA multi-step
+    // MARK: - 2FA
+    //
+    // Critical: do NOT present a modal when requesting trusted-device approval.
+    // The system Apple "Allow" / code UI must appear on top. Our sheet only
+    // opens when the user must type the 6-digit code.
 
     private func handleVerification(_ request: TwoFactorRequest) async -> TwoFactorResponse {
         await withCheckedContinuation { continuation in
             Task { @MainActor in
-                self.pendingVerification = continuation
                 self.verificationCode = ""
 
                 switch request {
@@ -155,41 +163,69 @@ final class SideSignAppleAccountProvider: ObservableObject {
                     self.availablePhones = phones
                     self.selectedDelivery = preferred
                     self.selectedPhoneID = phones.first?.id ?? ""
-                    self.twoFactorTitle = "Verification method"
-                    self.twoFactorMessage = "Choose how Apple should send the code, then tap Continue."
+
+                    // Prefer trusted device: auto-request, no modal → system prompt can show.
+                    if preferred == .trustedDevice || phones.isEmpty {
+                        self.pendingVerification = nil
+                        self.twoFactorPhase = .waitingForDelivery
+                        self.status = "Approve on your iPhone (system prompt). Then enter the code here."
+                        continuation.resume(returning: .requestTrustedDevice)
+                        return
+                    }
+
+                    // Multiple phone options — need a lightweight picker (no trusted device).
+                    self.pendingVerification = continuation
+                    self.twoFactorTitle = "How to verify"
+                    self.twoFactorMessage = "Choose SMS or voice, then Continue."
                     self.twoFactorPhase = .chooseMethod
 
                 case .trustedDevice(let error):
                     self.selectedDelivery = .trustedDevice
                     self.availablePhones = []
-                    // If Apple already asked for code entry (error present after push),
-                    // go straight to enterCode; otherwise first request approval.
+
+                    // Second callback / error path → user must type the code.
                     if let error, !error.isEmpty {
+                        self.pendingVerification = continuation
                         self.twoFactorTitle = "Enter code"
                         self.twoFactorMessage = error
                         self.twoFactorPhase = .enterCode
-                    } else {
-                        self.twoFactorTitle = "Trusted device"
-                        self.twoFactorMessage = "Tap Continue so Apple can send a prompt to your iPhone/Mac. Approve it there, then you'll enter the code."
-                        self.twoFactorPhase = .chooseMethod
+                        self.status = "Enter the code from your Apple device."
+                        return
                     }
+
+                    // First trusted-device challenge: request immediately, no modal.
+                    self.pendingVerification = nil
+                    self.twoFactorPhase = .waitingForDelivery
+                    self.status = "Approve on your iPhone (system prompt on top). Code field opens after."
+                    continuation.resume(returning: .requestTrustedDevice)
 
                 case .sms(let phones, let activeID, let error):
                     self.availablePhones = phones
                     self.selectedDelivery = .sms
                     self.selectedPhoneID = activeID.isEmpty ? (phones.first?.id ?? "") : activeID
-                    if let error, error.lowercased().contains("code") || error.lowercased().contains("incorrect") {
-                        self.twoFactorTitle = "SMS code"
-                        self.twoFactorMessage = error
-                        self.twoFactorPhase = .enterCode
-                    } else if error == nil && activeID.isEmpty == false {
-                        // Code was requested — show enter field
+
+                    let needsCode = (error != nil && !error!.isEmpty)
+                        || (!activeID.isEmpty && error == nil)
+
+                    if needsCode {
+                        self.pendingVerification = continuation
                         self.twoFactorTitle = "Enter SMS code"
-                        self.twoFactorMessage = "Enter the 6-digit code Apple sent by text message."
+                        self.twoFactorMessage = error ?? "Enter the 6-digit code from the text message."
                         self.twoFactorPhase = .enterCode
+                        self.status = "Enter the SMS code."
+                        return
+                    }
+
+                    // First SMS request: auto-send to first/selected phone, no blocking sheet.
+                    if let phone = phones.first(where: { $0.id == self.selectedPhoneID }) ?? phones.first {
+                        self.pendingVerification = nil
+                        self.twoFactorPhase = .waitingForDelivery
+                        self.status = "SMS requested. Enter the code when it arrives."
+                        continuation.resume(returning: .requestSMS(phoneID: phone.id))
                     } else {
-                        self.twoFactorTitle = "Send SMS code"
-                        self.twoFactorMessage = error ?? "Tap Continue to request an SMS code."
+                        self.pendingVerification = continuation
+                        self.twoFactorTitle = "SMS"
+                        self.twoFactorMessage = "No trusted phone numbers found."
                         self.twoFactorPhase = .chooseMethod
                     }
 
@@ -197,13 +233,24 @@ final class SideSignAppleAccountProvider: ObservableObject {
                     self.availablePhones = phones
                     self.selectedDelivery = .voice
                     self.selectedPhoneID = activeID.isEmpty ? (phones.first?.id ?? "") : activeID
-                    if error != nil {
-                        self.twoFactorTitle = "Voice code"
-                        self.twoFactorMessage = error ?? "Enter the code from the call."
+
+                    if let error, !error.isEmpty {
+                        self.pendingVerification = continuation
+                        self.twoFactorTitle = "Enter voice code"
+                        self.twoFactorMessage = error
                         self.twoFactorPhase = .enterCode
+                        return
+                    }
+
+                    if let phone = phones.first(where: { $0.id == self.selectedPhoneID }) ?? phones.first {
+                        self.pendingVerification = nil
+                        self.twoFactorPhase = .waitingForDelivery
+                        self.status = "Voice call requested. Enter the code after the call."
+                        continuation.resume(returning: .requestVoice(phoneID: phone.id))
                     } else {
-                        self.twoFactorTitle = "Request voice call"
-                        self.twoFactorMessage = "Tap Continue so Apple can call you with a code."
+                        self.pendingVerification = continuation
+                        self.twoFactorTitle = "Voice"
+                        self.twoFactorMessage = "No phone numbers available."
                         self.twoFactorPhase = .chooseMethod
                     }
                 }
@@ -211,51 +258,44 @@ final class SideSignAppleAccountProvider: ObservableObject {
         }
     }
 
-    /// Step 1: request delivery (trusted device / SMS / voice). Closes sheet; SideSign will call back for code.
+    /// Manual send when user picked SMS/voice in chooseMethod sheet.
     func requestDelivery() {
         guard let continuation = pendingVerification else { return }
         pendingVerification = nil
         twoFactorPhase = .waitingForDelivery
-        status = "Waiting for Apple verification…"
 
         switch selectedDelivery {
         case .trustedDevice:
+            status = "Approve on your iPhone (system prompt)."
             continuation.resume(returning: .requestTrustedDevice)
         case .sms:
             let phone = selectedPhoneID.isEmpty ? availablePhones.first?.id : selectedPhoneID
             if let phone {
+                status = "SMS requested…"
                 continuation.resume(returning: .requestSMS(phoneID: phone))
             } else {
-                continuation.resume(returning: .cancel)
                 twoFactorPhase = .none
+                continuation.resume(returning: .cancel)
             }
         case .voice:
             let phone = selectedPhoneID.isEmpty ? availablePhones.first?.id : selectedPhoneID
             if let phone {
+                status = "Voice call requested…"
                 continuation.resume(returning: .requestVoice(phoneID: phone))
             } else {
-                continuation.resume(returning: .cancel)
                 twoFactorPhase = .none
+                continuation.resume(returning: .cancel)
             }
         }
     }
 
-    /// Step 2: submit the 6-digit code.
     func submitCode() {
         let code = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty, let continuation = pendingVerification else { return }
         pendingVerification = nil
         twoFactorPhase = .none
+        status = "Verifying code…"
         continuation.resume(returning: .verificationCode(code))
-    }
-
-    /// If already in enterCode and user somehow needs re-request.
-    func submitVerification() {
-        if twoFactorPhase == .enterCode {
-            submitCode()
-        } else {
-            requestDelivery()
-        }
     }
 
     func cancelVerification() {
@@ -392,6 +432,26 @@ struct AppleDeveloperPortalSignInView: View {
                         .padding(.top, 12)
 
                         credentialsCard
+
+                        // Inline waiting banner (no modal — system prompt can appear)
+                        if model.twoFactorPhase == .waitingForDelivery {
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                    .tint(Theme.primaryLight)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Waiting for Apple…")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(Theme.textPrimary)
+                                    Text("Look for the system prompt on this iPhone. Approve it — our code field opens after.")
+                                        .font(.caption)
+                                        .foregroundColor(Theme.textSecondary)
+                                }
+                            }
+                            .padding(14)
+                            .glassCard(cornerRadius: 16)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+
                         teamsCard
 
                         Text(model.status)
@@ -414,7 +474,7 @@ struct AppleDeveloperPortalSignInView: View {
                             .foregroundColor(Theme.error)
                         }
 
-                        Text("Password is never saved. If a server shows 434, pick another from the list. Free Apple ID certs last ~7 days.")
+                        Text("Password is never saved. If a server shows 434, pick another. Free Apple ID certs last ~7 days.")
                             .font(.caption2)
                             .foregroundColor(Theme.textTertiary)
                             .padding(.bottom, 20)
@@ -450,8 +510,6 @@ struct AppleDeveloperPortalSignInView: View {
         }
         .preferredColorScheme(.dark)
     }
-
-    // MARK: Credentials
 
     private var credentialsCard: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -511,7 +569,7 @@ struct AppleDeveloperPortalSignInView: View {
                 Task { await model.signIn() }
             } label: {
                 HStack(spacing: 8) {
-                    if model.isBusy {
+                    if model.isBusy && model.twoFactorPhase != .waitingForDelivery {
                         ProgressView().tint(.white)
                     } else {
                         Image(systemName: "apple.logo")
@@ -713,7 +771,7 @@ struct AppleDeveloperPortalSignInView: View {
     }
 }
 
-// MARK: - 2FA sheet (request → approve → enter code)
+// MARK: - Sheet only for code entry / rare method pick
 
 struct TwoFactorSheet: View {
     @ObservedObject var model: SideSignAppleAccountProvider
@@ -734,11 +792,9 @@ struct TwoFactorSheet: View {
 
                     if model.twoFactorPhase == .chooseMethod {
                         methodPicker
-
                         if model.selectedDelivery != .trustedDevice, !model.availablePhones.isEmpty {
                             phonePicker
                         }
-
                         Button {
                             Haptic.medium()
                             model.requestDelivery()
@@ -752,16 +808,6 @@ struct TwoFactorSheet: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                    }
-
-                    if model.twoFactorPhase == .waitingForDelivery {
-                        HStack(spacing: 12) {
-                            ProgressView()
-                            Text("Waiting for Apple… Approve on your device if prompted.")
-                                .font(.subheadline)
-                                .foregroundColor(Theme.textSecondary)
-                        }
-                        .padding(.vertical, 8)
                     }
 
                     if model.twoFactorPhase == .enterCode {
