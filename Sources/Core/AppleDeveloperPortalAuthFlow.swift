@@ -12,7 +12,7 @@ enum AppleAuthenticationStep: Equatable {
     case failed(message: String)
 }
 
-enum AppleVerificationMethod: String, CaseIterable, Identifiable {
+enum AppleVerificationMethod: String, CaseIterable, Identifiable, Sendable {
     case trustedDevice
     case sms
     case voice
@@ -28,16 +28,20 @@ enum AppleVerificationMethod: String, CaseIterable, Identifiable {
     }
 }
 
-/// A challenge returned by an Apple Developer Portal authentication provider.
-/// The UI must render the challenge without inventing a successful session.
-enum AppleVerificationChallenge: Equatable {
+enum AppleVerificationChallenge: Equatable, Sendable {
     case chooseMethod(available: [AppleVerificationMethod])
     case enterCode(method: AppleVerificationMethod, destination: String?)
 }
 
-/// Inputs for a single login attempt. Do not store this value in UserDefaults,
+enum AppleVerificationResponse: Sendable {
+    case choose(AppleVerificationMethod)
+    case code(String)
+    case cancel
+}
+
+/// Inputs for a single login attempt. Never persist this value in UserDefaults,
 /// Keychain, analytics, crash reports, or view-model persistence.
-struct AppleAuthenticationCredentials {
+struct AppleAuthenticationCredentials: Sendable {
     let appleID: String
     let password: String
 }
@@ -49,7 +53,7 @@ struct AppleAuthenticationCredentials {
 protocol AppleDeveloperPortalAuthenticating: Sendable {
     func authenticate(
         credentials: AppleAuthenticationCredentials,
-        verificationHandler: @escaping @Sendable (AppleVerificationChallenge) async throws -> String?
+        verificationHandler: @escaping @Sendable (AppleVerificationChallenge) async throws -> AppleVerificationResponse
     ) async throws -> AppleDeveloperPortalSession
 }
 
