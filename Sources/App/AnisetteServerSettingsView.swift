@@ -13,10 +13,11 @@ struct AnisetteServerSettingsView: View {
                         Text("Anisette servers")
                             .font(.system(size: 26, weight: .bold))
                             .foregroundStyle(Theme.primaryGradient)
-                        Text("Load a server list from a SideStore-compatible JSON catalog. The default is SideStore's public community catalog; you can also use your own HTTPS URL.")
+                        Text("Load a server list from SideStore's public community catalog, or use your own HTTPS URL.")
                             .font(.subheadline)
                             .foregroundColor(Theme.textSecondary)
                     }
+
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Catalog URL")
                             .font(.headline)
@@ -45,6 +46,7 @@ struct AnisetteServerSettingsView: View {
                     .padding(16)
                     .background(Theme.cardGradient)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text("Catalog entries")
@@ -55,19 +57,47 @@ struct AnisetteServerSettingsView: View {
                                 .font(.caption.monospacedDigit())
                                 .foregroundColor(Theme.textSecondary)
                         }
+
                         if catalog.servers.isEmpty {
-                            EmptyStateView(icon: "server.rack", title: "No catalog loaded", message: "Load the default SideStore catalog or enter another trusted HTTPS catalog URL.")
-                                .padding(.vertical, 8)
+                            EmptyStateView(
+                                icon: "server.rack",
+                                title: "No catalog loaded",
+                                message: "Load the SideStore catalog or enter another trusted HTTPS catalog URL."
+                            )
+                            .padding(.vertical, 8)
                         } else {
                             ForEach(catalog.servers) { server in
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(server.name)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundColor(Theme.textPrimary)
-                                    Text(server.address)
-                                        .font(.caption.monospaced())
-                                        .foregroundColor(Theme.textSecondary)
-                                        .textSelection(.enabled)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(server.name)
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundColor(Theme.textPrimary)
+                                        Text(server.address)
+                                            .font(.caption.monospaced())
+                                            .foregroundColor(Theme.textSecondary)
+                                            .textSelection(.enabled)
+                                    }
+
+                                    HStack(spacing: 10) {
+                                        Button {
+                                            Task { await catalog.checkServer(server) }
+                                        } label: {
+                                            HStack(spacing: 6) {
+                                                if catalog.checkingServerIDs.contains(server.id) {
+                                                    ProgressView().controlSize(.small)
+                                                } else {
+                                                    Image(systemName: "network")
+                                                }
+                                                Text(catalog.checkingServerIDs.contains(server.id) ? "Testing…" : "Test server")
+                                            }
+                                            .font(.caption.weight(.semibold))
+                                        }
+                                        .disabled(catalog.checkingServerIDs.contains(server.id))
+
+                                        if let health = catalog.serverHealth[server.id] {
+                                            healthLabel(health)
+                                        }
+                                    }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.vertical, 8)
@@ -80,7 +110,8 @@ struct AnisetteServerSettingsView: View {
                     .padding(16)
                     .background(Theme.surfaceElevated)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    Label("Security: only HTTPS catalog and server URLs are accepted. Catalog entries are not proof that a server is online or trustworthy. This screen configures the list only; Apple ID authentication, signing and installation are not implemented yet.", systemImage: "info.circle")
+
+                    Label("A successful test only confirms that HTTPS /v3/client_info responded with HTTP 200 at that moment. It does not verify server trust or complete Apple authentication. Never send your Apple ID password to an Anisette server.", systemImage: "info.circle")
                         .font(.caption)
                         .foregroundColor(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -95,6 +126,28 @@ struct AnisetteServerSettingsView: View {
                     .font(.headline)
                     .foregroundColor(Theme.textPrimary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func healthLabel(_ health: AnisetteServerCatalog.ServerHealth) -> some View {
+        switch health {
+        case .online:
+            Label("HTTP 200", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundColor(Theme.success)
+        case .httpError(let code):
+            Label("HTTP \(code)", systemImage: "exclamationmark.circle.fill")
+                .font(.caption)
+                .foregroundColor(Theme.warning)
+        case .invalidResponse:
+            Label("Invalid response", systemImage: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundColor(Theme.warning)
+        case .unavailable:
+            Label("Unavailable", systemImage: "wifi.slash")
+                .font(.caption)
+                .foregroundColor(Theme.warning)
         }
     }
 }
