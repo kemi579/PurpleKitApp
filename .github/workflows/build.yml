@@ -22,13 +22,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
-
-      - name: Show toolchain
+      - name: Select Xcode 16
         run: |
+          set -euo pipefail
+          XCODE_PATH="$(find /Applications -maxdepth 1 -name 'Xcode_16*.app' -print -quit)"
+          if [ -z "$XCODE_PATH" ]; then XCODE_PATH="/Applications/Xcode.app"; fi
+          sudo xcode-select -s "$XCODE_PATH"
+
+      - name: Show and verify toolchain
+        run: |
+          set -euo pipefail
           xcodebuild -version
           swift --version
+          swift --version | grep -E 'Swift version 6\.'
 
       - name: Install XcodeGen
         run: brew install xcodegen
