@@ -56,7 +56,7 @@ struct SettingsView: View {
                                     showLogout = true
                                 }
                             } else {
-                                Text("Apple ID sign-in is not implemented yet. You can save your email for convenience; this does not authenticate with Apple or create a certificate.")
+                                Text("Use the Apple Developer Portal screen below to sign in with Apple ID, complete 2FA, load teams, and request a development certificate.")
                                     .font(.subheadline)
                                     .foregroundColor(Theme.textSecondary)
 
@@ -64,7 +64,7 @@ struct SettingsView: View {
                                     .textInputAutocapitalization(.never)
                                     .keyboardType(.emailAddress)
 
-                                PurpleButton(title: "Save email", icon: "envelope") {
+                                PurpleButton(title: "Save email only", icon: "envelope") {
                                     certs.login(email: email.isEmpty ? certs.appleID : email)
                                     email = ""
                                 }
@@ -99,7 +99,7 @@ struct SettingsView: View {
                                     Text("Apple ID sign-in & 2FA")
                                         .font(.headline)
                                         .foregroundColor(Theme.textPrimary)
-                                    Text("Provider integration is still required")
+                                    Text("Apple ID + 2FA + development certificate")
                                         .font(.caption)
                                         .foregroundColor(Theme.textSecondary)
                                 }
@@ -146,7 +146,7 @@ struct SettingsView: View {
 
                             infoLine(icon: "info.circle", text: "Free Apple ID = 7-day certificate, max 3 apps, 10 app IDs.")
                             infoLine(icon: "arrow.triangle.2.circlepath", text: "Refresh before expiry or apps stop launching.")
-                            infoLine(icon: "lock.shield", text: "The sign-in screen is a UI boundary only; no Apple authentication provider, signing or installation is connected yet.")
+                            infoLine(icon: "lock.shield", text: "Apple ID authentication and certificate requests use SideSign; IPA signing and device installation are separate steps.")
                         }
 
                         // App info
