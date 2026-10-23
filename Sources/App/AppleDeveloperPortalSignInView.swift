@@ -11,16 +11,25 @@ final class AppleDeveloperPortalSignInModel: ObservableObject {
     @Published private(set) var isBusy = false
 
     private let provider: (any AppleDeveloperPortalAuthenticating)?
+    private var verificationContinuation: CheckedContinuation<AppleVerificationResponse, Never>?
 
     init(provider: (any AppleDeveloperPortalAuthenticating)? = nil) {
         self.provider = provider
     }
 
     var canSubmit: Bool {
-        !isBusy &&
-        appleID.contains("@") &&
-        !password.isEmpty &&
-        provider != nil
+        !isBusy && appleID.contains("@") && !password.isEmpty && provider != nil
+    }
+
+    var availableVerificationMethods: [AppleVerificationMethod] {
+        guard case .selectingVerificationMethod(let methods) = step else { return [] }
+        return methods
+    }
+
+    var canSubmitVerificationCode: Bool {
+        guard case .awaitingVerificationCode = step else { return false }
+        let code = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !code.isEmpty && verificationContinuation != nil
     }
 
     func signIn() async {
@@ -40,7 +49,6 @@ final class AppleDeveloperPortalSignInModel: ObservableObject {
         isBusy = true
         step = .preparingAnisette
         defer {
-            // Never keep a password in the view model after an attempt.
             password = ""
             isBusy = false
         }
@@ -58,30 +66,59 @@ final class AppleDeveloperPortalSignInModel: ObservableObject {
         } catch let error as AppleDeveloperPortalAuthError {
             step = .failed(message: error.localizedDescription)
         } catch {
-            // Do not display arbitrary provider/server errors; they may contain
-            // response details or sensitive authentication material.
             step = .failed(message: "Apple sign-in failed. Check the connection and try again.")
         }
     }
 
+    func chooseVerificationMethod(_ method: AppleVerificationMethod) {
+        guard availableVerificationMethods.contains(method),
+              let continuation = verificationContinuation else { return }
+        verificationContinuation = nil
+        continuation.resume(returning: .choose(method))
+    }
+
+    func submitVerificationCode() {
+        let code = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, let continuation = verificationContinuation else { return }
+        verificationCode = ""
+        verificationContinuation = nil
+        continuation.resume(returning: .code(code))
+    }
+
+    func cancelVerification() {
+        guard let continuation = verificationContinuation else { return }
+        verificationContinuation = nil
+        verificationCode = ""
+        continuation.resume(returning: .cancel)
+    }
+
     func clear() {
+        cancelVerification()
         password = ""
         verificationCode = ""
         step = .credentials
     }
 
     private func respond(to challenge: AppleVerificationChallenge) async -> AppleVerificationResponse {
-        switch challenge {
-        case .chooseMethod(let methods):
-            step = .selectingVerificationMethod(methods)
-            // The UI currently has no continuation presenter wired into this
-            // provider-independent model. Cancel rather than guessing a method.
-            return .cancel
-        case .enterCode(let method, let destination):
-            step = .awaitingVerificationCode(method: method, destination: destination)
-            // A production provider adapter must bridge this async callback to
-            // a user-presented continuation. Never submit an empty/fake code.
-            return .cancel
+        await withCheckedContinuation { continuation in
+            // Only one verification prompt may be active for a provider attempt.
+            guard verificationContinuation == nil else {
+                continuation.resume(returning: .cancel)
+                return
+            }
+            verificationContinuation = continuation
+            switch challenge {
+            case .chooseMethod(let methods):
+                guard !methods.isEmpty else {
+                    verificationContinuation = nil
+                    continuation.resume(returning: .cancel)
+                    return
+                }
+                step = .selectingVerificationMethod(methods)
+            case .enterCode(let method, let destination):
+                verificationCode = ""
+                step = .awaitingVerificationCode(method: method, destination: destination)
+            }
         }
     }
 }
@@ -133,8 +170,7 @@ struct AppleDeveloperPortalSignInView: View {
                             } label: {
                                 HStack {
                                     if model.isBusy { ProgressView().tint(.white) }
-                                    Text("Sign in")
-                                        .fontWeight(.semibold)
+                                    Text("Sign in").fontWeight(.semibold)
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding(14)
@@ -172,12 +208,42 @@ struct AppleDeveloperPortalSignInView: View {
         case .preparingAnisette:
             Label("Preparing secure sign-in…", systemImage: "lock.shield")
                 .foregroundStyle(Theme.textSecondary)
-        case .selectingVerificationMethod:
-            Label("Apple verification method selection is waiting for the real provider.", systemImage: "checkmark.shield")
-                .foregroundStyle(Theme.textSecondary)
-        case .awaitingVerificationCode:
-            Label("2FA code entry becomes available when a provider is connected.", systemImage: "number")
-                .foregroundStyle(Theme.textSecondary)
+        case .selectingVerificationMethod(let methods):
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Choose a verification method").font(.headline)
+                ForEach(methods) { method in
+                    Button(method.title) {
+                        model.chooseVerificationMethod(method)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Button("Cancel verification", role: .cancel) {
+                    model.cancelVerification()
+                }
+                .foregroundStyle(Theme.warning)
+            }
+        case .awaitingVerificationCode(let method, let destination):
+            VStack(alignment: .leading, spacing: 10) {
+                Text(method.title).font(.headline)
+                if let destination, !destination.isEmpty {
+                    Text("Code destination: \(destination)")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                TextField("Verification code", text: $model.verificationCode)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .padding(14)
+                    .background(Theme.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                Button("Submit code") { model.submitVerificationCode() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canSubmitVerificationCode)
+                Button("Cancel verification", role: .cancel) {
+                    model.cancelVerification()
+                }
+                .foregroundStyle(Theme.warning)
+            }
         case .authenticating:
             Label("Authenticating with Apple…", systemImage: "arrow.triangle.2.circlepath")
                 .foregroundStyle(Theme.textSecondary)
