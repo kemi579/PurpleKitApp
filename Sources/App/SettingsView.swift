@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var certs: CertificateStore
+    @StateObject private var signer = IPASigningService.shared
     @State private var showSignIn = false
     @State private var showLogout = false
     @State private var appear = false
@@ -13,7 +14,6 @@ struct SettingsView: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 20) {
-                        // Header
                         VStack(alignment: .leading, spacing: 4) {
                             Text("PurpleKit")
                                 .font(.system(size: 13, weight: .medium))
@@ -26,30 +26,31 @@ struct SettingsView: View {
                         .opacity(appear ? 1 : 0)
                         .offset(y: appear ? 0 : 12)
 
-                        // Apple ID — top
                         appleIDCard
                             .opacity(appear ? 1 : 0)
                             .offset(y: appear ? 0 : 16)
 
-                        // Preferences
+                        deviceCard
+                            .opacity(appear ? 1 : 0)
+                            .offset(y: appear ? 0 : 18)
+
                         preferencesCard
                             .opacity(appear ? 1 : 0)
                             .offset(y: appear ? 0 : 20)
 
-                        // Sideloading info
                         VStack(alignment: .leading, spacing: 14) {
                             SectionHeader(title: "Sideloading", icon: "shippingbox.fill", color: Theme.neon)
 
                             infoLine(icon: "info.circle", text: "Free Apple ID = 7-day certificate, max 3 apps, 10 app IDs.")
                             infoLine(icon: "arrow.triangle.2.circlepath", text: "Refresh before expiry or apps stop launching.")
-                            infoLine(icon: "lock.shield", text: "If Anisette returns 434 — switch to another server in the list.")
+                            infoLine(icon: "iphone", text: "UDID is required to register this device on the portal before signing.")
+                            infoLine(icon: "lock.shield", text: "If Anisette returns 434 — switch to another server.")
                         }
                         .padding(16)
                         .glassCard(cornerRadius: 18, intensity: 0.8)
                         .opacity(appear ? 1 : 0)
                         .offset(y: appear ? 0 : 24)
 
-                        // About
                         VStack(alignment: .leading, spacing: 12) {
                             SectionHeader(title: "About", icon: "info.circle", color: Theme.textSecondary)
 
@@ -87,8 +88,6 @@ struct SettingsView: View {
             }
         }
     }
-
-    // MARK: - Apple ID card
 
     private var appleIDCard: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -183,7 +182,36 @@ struct SettingsView: View {
         .glassCard(cornerRadius: 20)
     }
 
-    // MARK: - Preferences
+    private var deviceCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "This device", icon: "iphone", color: Theme.primaryLight)
+
+            Text("UDID (required to sign & install)")
+                .font(.caption.weight(.medium))
+                .foregroundColor(Theme.textSecondary)
+
+            TextField("00008110-001A2B3C4D5E6F70", text: $signer.deviceUDID)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.system(size: 13, design: .monospaced))
+                .padding(12)
+                .background {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Theme.glassStroke, lineWidth: 1)
+                        }
+                }
+                .foregroundColor(Theme.textPrimary)
+
+            Text("Find UDID: Finder → iPhone → click serial until UDID appears, or Xcode → Devices, or SideStore.")
+                .font(.caption2)
+                .foregroundColor(Theme.textTertiary)
+        }
+        .padding(16)
+        .glassCard(cornerRadius: 18)
+    }
 
     private var preferencesCard: some View {
         VStack(alignment: .leading, spacing: 14) {
