@@ -4,6 +4,7 @@ import SideSign
 
 struct IPAImportView: View {
     @StateObject private var signer = IPASigningService.shared
+    @StateObject private var installer = DeviceInstaller.shared
     @EnvironmentObject private var certs: CertificateStore
 
     @State private var isImporterPresented = false
@@ -12,8 +13,6 @@ struct IPAImportView: View {
     @State private var statusMessage: String?
     @State private var showDeleteConfirmation = false
     @State private var fileToDelete: ImportedIPA?
-    @State private var shareURL: URL?
-    @State private var showShare = false
     @State private var busyID: String?
 
     var body: some View {
@@ -33,28 +32,12 @@ struct IPAImportView: View {
                         Text("IPA Library")
                             .font(.system(size: 26, weight: .bold))
                             .foregroundStyle(Theme.primaryGradient)
-                        Text("Import → Sign with your cert → Install")
+                        Text("Import → Sign → Install (minimuxer)")
                             .font(.subheadline)
                             .foregroundColor(Theme.textSecondary)
                     }
 
-                    // Status strip
-                    HStack(spacing: 10) {
-                        statusDot(certs.isLoggedIn && !certs.certName.isEmpty)
-                        Text(certs.isLoggedIn
-                              ? (certs.certName.isEmpty ? "Signed in · need certificate" : "Ready to sign")
-                              : "Sign in required")
-                            .font(.caption.weight(.medium))
-                            .foregroundColor(Theme.textSecondary)
-                        Spacer()
-                        if signer.deviceUDID.isEmpty {
-                            Text("UDID missing")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundColor(Theme.warning)
-                        }
-                    }
-                    .padding(12)
-                    .glassCard(cornerRadius: 14, intensity: 0.8)
+                    readinessCard
 
                     Button {
                         isImporterPresented = true
@@ -67,6 +50,17 @@ struct IPAImportView: View {
                         )
                     }
                     .buttonStyle(.plain)
+
+                    if installer.isWorking || signer.isWorking {
+                        HStack(spacing: 12) {
+                            ProgressView().tint(Theme.primaryLight)
+                            Text(progressLabel)
+                                .font(.subheadline)
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                        .padding(14)
+                        .glassCard(cornerRadius: 16)
+                    }
 
                     if let statusMessage {
                         Label(statusMessage, systemImage: "checkmark.circle.fill")
@@ -86,21 +80,10 @@ struct IPAImportView: View {
                             .glassCard(cornerRadius: 14, intensity: 0.8)
                     }
 
-                    if signer.isWorking {
-                        HStack(spacing: 12) {
-                            ProgressView().tint(Theme.primaryLight)
-                            Text(signer.progressText.isEmpty ? "Working…" : signer.progressText)
-                                .font(.subheadline)
-                                .foregroundColor(Theme.textSecondary)
-                        }
-                        .padding(14)
-                        .glassCard(cornerRadius: 16)
-                    }
-
                     libraryCard
 
                     Label(
-                        "Sign uses SideSign + your development certificate. Install opens TrollStore if present, otherwise Share the signed IPA to SideStore/AltStore.",
+                        "Install uses SideStore stack: SideSign (sign) + minimuxer (AFC + InstallationProxy). Pairing file + LocalDevVPN required once, same as SideStore.",
                         systemImage: "info.circle"
                     )
                     .font(.caption)
@@ -139,12 +122,63 @@ struct IPAImportView: View {
         } message: {
             Text(fileToDelete?.name ?? "")
         }
-        .sheet(isPresented: $showShare) {
-            if let shareURL {
-                ShareSheet(items: [shareURL])
+        .onAppear(perform: reloadFiles)
+    }
+
+    private var progressLabel: String {
+        if !installer.status.isEmpty { return installer.status }
+        if !signer.progressText.isEmpty { return signer.progressText }
+        return "Working…"
+    }
+
+    private var readinessCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                statusDot(certs.isLoggedIn && !certs.certName.isEmpty)
+                Text(certs.isLoggedIn
+                      ? (certs.certName.isEmpty ? "Apple ID · need certificate" : "Certificate ready")
+                      : "Sign in required")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            HStack(spacing: 10) {
+                statusDot(installer.hasPairingFile)
+                Text(installer.hasPairingFile ? "Pairing file OK" : "Pairing file missing (Settings)")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(Theme.textSecondary)
+            }
+            HStack(spacing: 10) {
+                statusDot(installer.isMuxerReady)
+                Text(installer.isMuxerReady ? "Minimuxer ready" : "VPN + minimuxer not ready")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(Theme.textSecondary)
+            }
+
+            if !installer.isMuxerReady {
+                Button {
+                    Task {
+                        do {
+                            try await installer.startMuxer()
+                            statusMessage = installer.status
+                            errorMessage = nil
+                        } catch {
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                } label: {
+                    Text("Start minimuxer")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .foregroundColor(.white)
+                        .background(Theme.primaryGradient)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
         }
-        .onAppear(perform: reloadFiles)
+        .padding(12)
+        .glassCard(cornerRadius: 14, intensity: 0.8)
     }
 
     private var libraryCard: some View {
@@ -166,7 +200,7 @@ struct IPAImportView: View {
                 EmptyStateView(
                     icon: "shippingbox",
                     title: "Your library is empty",
-                    message: "Import an IPA, then Sign & Install."
+                    message: "Import an IPA, then Install."
                 )
                 .padding(.vertical, 4)
             } else {
@@ -207,19 +241,19 @@ struct IPAImportView: View {
 
                         HStack(spacing: 10) {
                             actionButton(
-                                title: busyID == file.id + "-sign" ? "Signing…" : "Sign",
+                                title: busyID == file.id + "-sign" ? "Signing…" : "Sign only",
                                 icon: "signature",
-                                disabled: signer.isWorking
+                                disabled: signer.isWorking || installer.isWorking
                             ) {
-                                Task { await sign(file) }
+                                Task { await signOnly(file) }
                             }
 
                             actionButton(
-                                title: busyID == file.id + "-install" ? "…" : "Sign & Install",
+                                title: busyID == file.id + "-install" ? "Installing…" : "Install",
                                 icon: "arrow.down.app.fill",
-                                disabled: signer.isWorking
+                                disabled: signer.isWorking || installer.isWorking
                             ) {
-                                Task { await signAndInstall(file) }
+                                Task { await install(file) }
                             }
                         }
                     }
@@ -261,9 +295,7 @@ struct IPAImportView: View {
             .shadow(color: (ok ? Theme.success : Theme.warning).opacity(0.5), radius: 4)
     }
 
-    // MARK: - Actions
-
-    private func sign(_ file: ImportedIPA) async {
+    private func signOnly(_ file: ImportedIPA) async {
         errorMessage = nil
         statusMessage = nil
         busyID = file.id + "-sign"
@@ -271,7 +303,6 @@ struct IPAImportView: View {
         do {
             let signed = try await signer.sign(ipaURL: file.url)
             statusMessage = "Signed: \(signed.lastPathComponent)"
-            shareURL = signed
             Haptic.success()
         } catch {
             errorMessage = error.localizedDescription
@@ -279,38 +310,20 @@ struct IPAImportView: View {
         }
     }
 
-    private func signAndInstall(_ file: ImportedIPA) async {
+    private func install(_ file: ImportedIPA) async {
         errorMessage = nil
         statusMessage = nil
         busyID = file.id + "-install"
         defer { busyID = nil }
         do {
-            let signed = try await signer.sign(ipaURL: file.url)
-            statusMessage = "Signed. Opening installer…"
-            shareURL = signed
-
-            // Try TrollStore first
-            var opened = false
-            for scheme in signer.installURLSchemes(for: signed) {
-                if await UIApplication.shared.open(scheme) {
-                    opened = true
-                    statusMessage = "Opened TrollStore install."
-                    break
-                }
-            }
-            if !opened {
-                // Share sheet → SideStore / Files / AltStore
-                showShare = true
-                statusMessage = "Share the signed IPA to SideStore or AltStore to install."
-            }
+            try await installer.signAndInstall(ipaURL: file.url)
+            statusMessage = installer.status
             Haptic.success()
         } catch {
             errorMessage = error.localizedDescription
             Haptic.error()
         }
     }
-
-    // MARK: - Import / delete
 
     private func handleImport(_ result: Result<[URL], Error>) {
         errorMessage = nil
@@ -419,16 +432,4 @@ struct IPAImportView: View {
             }
         }
     }
-}
-
-// MARK: - Share sheet
-
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

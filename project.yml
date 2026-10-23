@@ -30,6 +30,9 @@ packages:
   SideSign:
     url: https://github.com/SideStore/SideSign.git
     branch: main
+  Minimuxer:
+    url: https://github.com/SideStore/minimuxer.git
+    branch: main
 targets:
   PurpleKit:
     type: application
@@ -37,6 +40,8 @@ targets:
     dependencies:
       - package: SideSign
         product: SideSign
+      - package: Minimuxer
+        product: Minimuxer
     sources:
       - path: Sources
         excludes:
