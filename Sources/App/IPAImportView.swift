@@ -12,9 +12,17 @@ struct IPAImportView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
 
-            ScrollView {
+            // Soft ambient orbs for nested screens
+            Circle()
+                .fill(Theme.primary.opacity(0.18))
+                .frame(width: 220, height: 220)
+                .blur(radius: 70)
+                .offset(x: -80, y: -120)
+                .ignoresSafeArea()
+
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("IPA Library")
                             .font(.system(size: 26, weight: .bold))
                             .foregroundStyle(Theme.primaryGradient)
@@ -26,32 +34,12 @@ struct IPAImportView: View {
                     Button {
                         isImporterPresented = true
                     } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: "square.and.arrow.down")
-                                .font(.title2.weight(.semibold))
-                                .foregroundColor(Theme.primaryLight)
-                                .frame(width: 48, height: 48)
-                                .background(Theme.primaryLight.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Import IPA")
-                                    .font(.headline)
-                                    .foregroundColor(Theme.textPrimary)
-                                Text("Choose an .ipa file from Files")
-                                    .font(.caption)
-                                    .foregroundColor(Theme.textSecondary)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(Theme.textSecondary)
-                        }
-                        .padding(16)
-                        .background(Theme.cardGradient)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.white.opacity(0.07), lineWidth: 1)
-                        }
+                        GlassLinkCard(
+                            icon: "square.and.arrow.down.fill",
+                            title: "Import IPA",
+                            subtitle: "Choose an .ipa file from Files",
+                            iconColor: Theme.primaryLight
+                        )
                     }
                     .buttonStyle(.plain)
 
@@ -60,6 +48,8 @@ struct IPAImportView: View {
                             .font(.caption)
                             .foregroundColor(Theme.warning)
                             .fixedSize(horizontal: false, vertical: true)
+                            .padding(12)
+                            .glassCard(cornerRadius: 14, intensity: 0.8)
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
@@ -71,6 +61,12 @@ struct IPAImportView: View {
                             Text("\(importedFiles.count)")
                                 .font(.caption.monospacedDigit())
                                 .foregroundColor(Theme.textSecondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background {
+                                    Capsule()
+                                        .fill(Color.white.opacity(0.08))
+                                }
                         }
 
                         if importedFiles.isEmpty {
@@ -79,14 +75,19 @@ struct IPAImportView: View {
                                 title: "Your library is empty",
                                 message: "Imported IPA files will be listed here."
                             )
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 4)
                         } else {
                             ForEach(importedFiles) { file in
                                 HStack(spacing: 12) {
                                     Image(systemName: "doc.zipper")
                                         .font(.title3)
                                         .foregroundColor(Theme.neon)
-                                        .frame(width: 36)
+                                        .frame(width: 40, height: 40)
+                                        .background {
+                                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                                .fill(Theme.neon.opacity(0.12))
+                                        }
+
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(file.name)
                                             .font(.subheadline.weight(.semibold))
@@ -96,7 +97,9 @@ struct IPAImportView: View {
                                             .font(.caption.monospacedDigit())
                                             .foregroundColor(Theme.textSecondary)
                                     }
+
                                     Spacer(minLength: 4)
+
                                     Button(role: .destructive) {
                                         fileToDelete = file
                                         showDeleteConfirmation = true
@@ -109,7 +112,8 @@ struct IPAImportView: View {
                                     .buttonStyle(.plain)
                                     .accessibilityLabel("Delete \(file.name)")
                                 }
-                                .padding(.vertical, 7)
+                                .padding(.vertical, 4)
+
                                 if file.id != importedFiles.last?.id {
                                     Divider().overlay(Color.white.opacity(0.08))
                                 }
@@ -117,16 +121,20 @@ struct IPAImportView: View {
                         }
                     }
                     .padding(16)
-                    .background(Theme.surfaceElevated)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .glassCard(cornerRadius: 18)
 
-                    Label("Current scope: this screen copies and stores IPA files only. It does not extract app metadata, verify signatures, sign apps, pair a device, or install packages.", systemImage: "info.circle")
-                        .font(.caption)
-                        .foregroundColor(Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Label(
+                        "Current scope: this screen copies and stores IPA files only. It does not extract app metadata, verify signatures, sign apps, pair a device, or install packages.",
+                        systemImage: "info.circle"
+                    )
+                    .font(.caption)
+                    .foregroundColor(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .glassCard(cornerRadius: 14, intensity: 0.7)
                 }
-                .padding(16)
-                .padding(.bottom, 24)
+                .padding(20)
+                .padding(.bottom, 40)
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -186,8 +194,6 @@ struct IPAImportView: View {
             throw ImportError.notIPA
         }
 
-        // An .ipa is a ZIP archive. Check its file signature before copying so
-        // arbitrary files renamed to .ipa are not silently added to the library.
         let handle = try FileHandle(forReadingFrom: sourceURL)
         defer { try? handle.close() }
         let signature = try handle.read(upToCount: 4) ?? Data()
