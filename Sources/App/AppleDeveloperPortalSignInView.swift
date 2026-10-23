@@ -61,6 +61,8 @@ final class AppStoreConnectSignInModel: ObservableObject {
         } catch { statusMessage = error.localizedDescription }
     }
 
+    func reportImportError(_ error: Error) { statusMessage = error.localizedDescription }
+
     func disconnect() {
         do {
             try KeychainVault.delete(account: "app-store-connect-api-key")
@@ -144,7 +146,7 @@ struct AppleDeveloperPortalSignInView: View {
                           allowsMultipleSelection: false) { result in
                 switch result {
                 case .success(let urls): if let url = urls.first { model.importPrivateKey(from: url) }
-                case .failure(let error): model.statusMessage = error.localizedDescription
+                case .failure(let error): model.reportImportError(error)
                 }
             }
         }
