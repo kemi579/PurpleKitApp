@@ -88,6 +88,32 @@ struct SettingsView: View {
                                 .stroke(Color.white.opacity(0.06), lineWidth: 1)
                         )
 
+                        NavigationLink {
+                            AnisetteServerSettingsView()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "server.rack")
+                                    .font(.title3)
+                                    .foregroundColor(Theme.neon)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Anisette servers")
+                                        .font(.headline)
+                                        .foregroundColor(Theme.textPrimary)
+                                    Text("Configure a SideStore-compatible catalog URL")
+                                        .font(.caption)
+                                        .foregroundColor(Theme.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(Theme.textSecondary)
+                            }
+                            .padding(16)
+                            .background(Theme.surfaceElevated)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+
                         // About sideload
                         VStack(alignment: .leading, spacing: 12) {
                             SectionHeader(title: "Sideloading", icon: "shippingbox.fill", color: Theme.neon)
