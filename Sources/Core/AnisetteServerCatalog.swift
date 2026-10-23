@@ -4,15 +4,17 @@ import Combine
 struct AnisetteServer: Codable, Identifiable, Hashable {
     let name: String
     let address: String
+    let isHidden: Bool
     var id: String { address }
 
-    init(name: String, address: String) {
+    init(name: String, address: String, isHidden: Bool = false) {
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.isHidden = isHidden
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, address, url
+        case name, address, url, isHidden
     }
 
     init(from decoder: Decoder) throws {
@@ -23,12 +25,14 @@ struct AnisetteServer: Codable, Identifiable, Hashable {
         } else {
             self.address = try container.decode(String.self, forKey: .url)
         }
+        isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(address, forKey: .address)
+        try container.encode(isHidden, forKey: .isHidden)
     }
 }
 
@@ -43,11 +47,13 @@ final class AnisetteServerCatalog: ObservableObject {
     @Published private(set) var isLoading = false
     @Published var lastError: String?
 
+    /// Official SideStore community catalog; entries still need live validation.
+    private static let defaultSourceURL = "https://servers.sidestore.io/servers.json"
     private static let sourceKey = "PurpleKit.anisetteCatalogSource"
     private static let serversKey = "PurpleKit.anisetteServers"
 
     private init() {
-        sourceURL = UserDefaults.standard.string(forKey: Self.sourceKey) ?? ""
+        sourceURL = UserDefaults.standard.string(forKey: Self.sourceKey) ?? Self.defaultSourceURL
         if let data = UserDefaults.standard.data(forKey: Self.serversKey),
            let decoded = try? JSONDecoder().decode([AnisetteServer].self, from: data) {
             servers = Self.validated(decoded)
@@ -106,7 +112,7 @@ final class AnisetteServerCatalog: ObservableObject {
             throw CatalogError.invalidJSON
         }
 
-        return validated(candidates)
+        return validated(candidates.filter { !$0.isHidden })
     }
 
     private static func validated(_ candidates: [AnisetteServer]) -> [AnisetteServer] {
@@ -121,7 +127,7 @@ final class AnisetteServerCatalog: ObservableObject {
                   url.user == nil,
                   url.password == nil,
                   seen.insert(url.absoluteString).inserted else { return nil }
-            return AnisetteServer(name: name, address: url.absoluteString)
+            return AnisetteServer(name: name, address: url.absoluteString, isHidden: false)
         }
     }
 
