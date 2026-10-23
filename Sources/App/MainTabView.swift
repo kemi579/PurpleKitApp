@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Custom liquid-glass tab bar with sliding indicator (like reference apps).
 struct MainTabView: View {
     @State private var tab = 1
     @StateObject private var certs = CertificateStore.shared
@@ -29,53 +28,72 @@ struct MainTabView: View {
             }
             .environmentObject(certs)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 64)
+            .padding(.bottom, 78)
 
-            liquidBar
+            floatingGlassBar
         }
         .preferredColorScheme(.dark)
     }
 
-    private var liquidBar: some View {
+    /// Floating capsule tab bar — material glass + sliding liquid highlight.
+    private var floatingGlassBar: some View {
         HStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 Button {
                     Haptic.light()
-                    withAnimation(.spring(response: 0.38, dampingFraction: 0.72)) {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
                         tab = index
                     }
                 } label: {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 3) {
                         ZStack {
                             if tab == index {
                                 Capsule()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                Color.white.opacity(0.22),
-                                                Color.white.opacity(0.08)
-                                            ],
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
-                                    )
-                                    .overlay(
+                                    .fill(.ultraThinMaterial)
+                                    .overlay {
                                         Capsule()
-                                            .strokeBorder(Color.white.opacity(0.25), lineWidth: 0.8)
-                                    )
-                                    .matchedGeometryEffect(id: "liquidTab", in: tabNS)
-                                    .frame(width: 52, height: 32)
+                                            .fill(
+                                                LinearGradient(
+                                                    colors: [
+                                                        Color.white.opacity(0.28),
+                                                        Theme.primary.opacity(0.35),
+                                                        Color.white.opacity(0.08)
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                )
+                                            )
+                                    }
+                                    .overlay {
+                                        Capsule()
+                                            .strokeBorder(
+                                                LinearGradient(
+                                                    colors: [
+                                                        Color.white.opacity(0.55),
+                                                        Color.white.opacity(0.12),
+                                                        Color.white.opacity(0.3)
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                ),
+                                                lineWidth: 1
+                                            )
+                                    }
+                                    .shadow(color: Theme.primary.opacity(0.45), radius: 10, y: 2)
+                                    .matchedGeometryEffect(id: "liquidGlassPill", in: tabNS)
+                                    .frame(width: 56, height: 34)
                             }
+
                             Image(systemName: tab == index ? item.selected : item.icon)
                                 .font(.system(size: 18, weight: .semibold))
-                                .foregroundColor(tab == index ? Theme.primaryLight : Theme.textTertiary)
-                                .scaleEffect(tab == index ? 1.08 : 1.0)
+                                .foregroundStyle(tab == index ? Color.white : Theme.textTertiary)
+                                .scaleEffect(tab == index ? 1.1 : 1.0)
                         }
-                        .frame(height: 32)
+                        .frame(height: 34)
 
                         Text(item.title)
-                            .font(.system(size: 10, weight: tab == index ? .semibold : .regular))
-                            .foregroundColor(tab == index ? Theme.primaryLight : Theme.textTertiary)
+                            .font(.system(size: 10, weight: tab == index ? .bold : .regular))
+                            .foregroundColor(tab == index ? .white : Theme.textTertiary)
                     }
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
@@ -83,20 +101,46 @@ struct MainTabView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
         .background {
-            Rectangle()
+            Capsule()
                 .fill(.ultraThinMaterial)
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.08))
-                        .frame(height: 0.5)
+                .opacity(0.92)
+                .overlay {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.14),
+                                    Color.white.opacity(0.04),
+                                    Color.white.opacity(0.1)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                 }
-                .shadow(color: .black.opacity(0.35), radius: 16, y: -4)
-                .ignoresSafeArea(edges: .bottom)
+                .overlay {
+                    Capsule()
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.4),
+                                    Color.white.opacity(0.08),
+                                    Color.white.opacity(0.22)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                }
+                .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
+                .shadow(color: Theme.primary.opacity(0.15), radius: 12, y: 2)
         }
+        .padding(.horizontal, 18)
+        .padding(.bottom, 10)
     }
 }
 
