@@ -1,37 +1,18 @@
 import Foundation
 import SwiftUI
 
-/// Local Apple ID + cert status storage.
-/// Real free-cert signing still happens via AltStore/SideStore/Sideloadly —
-/// we only keep credentials & status UI here (no private Apple APIs).
+@MainActor
 final class CertificateStore: ObservableObject {
     static let shared = CertificateStore()
 
     @Published var appleID: String = "" {
         didSet { UserDefaults.standard.set(appleID, forKey: Keys.appleID) }
     }
-    @Published var isLoggedIn: Bool = false {
-        didSet { UserDefaults.standard.set(isLoggedIn, forKey: Keys.loggedIn) }
-    }
-    @Published var certName: String = "" {
-        didSet { UserDefaults.standard.set(certName, forKey: Keys.certName) }
-    }
-    @Published var certExpires: Date? {
-        didSet {
-            if let d = certExpires {
-                UserDefaults.standard.set(d.timeIntervalSince1970, forKey: Keys.certExpires)
-            } else {
-                UserDefaults.standard.removeObject(forKey: Keys.certExpires)
-            }
-        }
-    }
-    @Published var lastRefresh: Date? {
-        didSet {
-            if let d = lastRefresh {
-                UserDefaults.standard.set(d.timeIntervalSince1970, forKey: Keys.lastRefresh)
-            }
-        }
-    }
+    @Published private(set) var isLoggedIn = false
+    @Published private(set) var certName = ""
+    @Published private(set) var certExpires: Date?
+    @Published private(set) var lastRefresh: Date?
+    @Published private(set) var teamName = ""
 
     private enum Keys {
         static let appleID = "PurpleKit.appleID"
@@ -39,16 +20,18 @@ final class CertificateStore: ObservableObject {
         static let certName = "PurpleKit.certName"
         static let certExpires = "PurpleKit.certExpires"
         static let lastRefresh = "PurpleKit.lastRefresh"
+        static let teamName = "PurpleKit.teamName"
     }
 
     private init() {
         appleID = UserDefaults.standard.string(forKey: Keys.appleID) ?? ""
-        isLoggedIn = UserDefaults.standard.bool(forKey: Keys.loggedIn)
-        certName = UserDefaults.standard.string(forKey: Keys.certName) ?? ""
-        let exp = UserDefaults.standard.double(forKey: Keys.certExpires)
-        if exp > 0 { certExpires = Date(timeIntervalSince1970: exp) }
-        let lr = UserDefaults.standard.double(forKey: Keys.lastRefresh)
-        if lr > 0 { lastRefresh = Date(timeIntervalSince1970: lr) }
+        // Do not restore fake "logged in" state from older builds.
+        // Real session is restored by SideSignAppleAccountProvider from Keychain.
+        isLoggedIn = false
+        certName = ""
+        certExpires = nil
+        lastRefresh = nil
+        teamName = ""
     }
 
     var daysLeft: Int? {
@@ -57,36 +40,43 @@ final class CertificateStore: ObservableObject {
     }
 
     var certStatusText: String {
-        guard isLoggedIn else { return "Not connected" }
-        if let days = daysLeft {
-            if days <= 0 { return "Expired — refresh needed" }
-            if days <= 2 { return "Expires in \(days)d — refresh soon" }
-            return "Active · \(days) days left"
+        if !isLoggedIn {
+            return "Not signed in"
         }
-        return "Connected"
+        if let days = daysLeft, !certName.isEmpty {
+            return days > 0 ? "Cert · \(days)d left" : "Cert expired"
+        }
+        if isLoggedIn && certName.isEmpty {
+            return "Signed in · no cert yet"
+        }
+        return "Signed in"
     }
 
     var isCertHealthy: Bool {
-        guard isLoggedIn, let days = daysLeft else { return false }
-        return days > 0
+        guard isLoggedIn, !certName.isEmpty, let days = daysLeft else { return false }
+        return days > 1
     }
 
-    func login(email: String) {
-        let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !e.isEmpty else { return }
-        appleID = e
+    /// Called after a real SideSign authentication succeeds.
+    func applyAuthenticatedSession(email: String, team: String?) {
+        appleID = email
         isLoggedIn = true
-        // Free Apple ID cert is ~7 days. Placeholder until real pairing is added.
-        certName = "iPhone Developer: \(e)"
-        certExpires = Calendar.current.date(byAdding: .day, value: 7, to: Date())
-        lastRefresh = Date()
+        teamName = team ?? ""
+        UserDefaults.standard.set(true, forKey: Keys.loggedIn)
+        UserDefaults.standard.set(teamName, forKey: Keys.teamName)
         Haptic.success()
     }
 
-    func refreshCert() {
-        guard isLoggedIn else { return }
-        certExpires = Calendar.current.date(byAdding: .day, value: 7, to: Date())
+    /// Called after a development certificate is issued and stored in Keychain.
+    func applyCertificate(name: String, expires: Date?) {
+        certName = name
+        certExpires = expires
         lastRefresh = Date()
+        UserDefaults.standard.set(name, forKey: Keys.certName)
+        if let expires {
+            UserDefaults.standard.set(expires.timeIntervalSince1970, forKey: Keys.certExpires)
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Keys.lastRefresh)
         Haptic.success()
     }
 
@@ -95,7 +85,17 @@ final class CertificateStore: ObservableObject {
         certName = ""
         certExpires = nil
         lastRefresh = nil
-        // keep appleID for convenience
+        teamName = ""
+        UserDefaults.standard.set(false, forKey: Keys.loggedIn)
+        UserDefaults.standard.removeObject(forKey: Keys.certName)
+        UserDefaults.standard.removeObject(forKey: Keys.certExpires)
+        UserDefaults.standard.removeObject(forKey: Keys.lastRefresh)
+        UserDefaults.standard.removeObject(forKey: Keys.teamName)
+        Haptic.light()
+    }
+
+    /// No-op placeholder; real refresh is done via SideSign on the sign-in screen.
+    func refreshCert() {
         Haptic.light()
     }
 }

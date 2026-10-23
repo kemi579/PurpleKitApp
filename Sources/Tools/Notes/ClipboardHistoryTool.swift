@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct ClipboardHistoryTool: Tool {
     let id = "clipboard"
     let name = "Clipboard History"
@@ -10,6 +11,7 @@ struct ClipboardHistoryTool: Tool {
     var content: AnyView { AnyView(ClipboardHistoryView()) }
 }
 
+@MainActor
 struct ClipboardHistoryView: View {
     @State private var items: [ClipItem] = []
     @State private var timer: Timer?
@@ -72,15 +74,19 @@ struct ClipboardHistoryView: View {
         }
         .onDisappear {
             timer?.invalidate()
+            timer = nil
         }
     }
 
     private func startMonitoring() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
-            checkClipboard()
+            Task { @MainActor in
+                checkClipboard()
+            }
         }
     }
 
+    @MainActor
     private func checkClipboard() {
         guard let str = UIPasteboard.general.string, !str.isEmpty else { return }
         if items.first?.text == str { return }

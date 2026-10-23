@@ -1,129 +1,357 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject var certs: CertificateStore
-    @State private var email = ""
+    @StateObject private var signer = IPASigningService.shared
+    @StateObject private var installer = DeviceInstaller.shared
+    @State private var showSignIn = false
     @State private var showLogout = false
+    @State private var appear = false
+    @State private var showPairingImporter = false
+    @State private var pairingError: String?
 
     var body: some View {
         NavigationStack {
             ZStack {
-                Theme.background.ignoresSafeArea()
+                Color.clear
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        Text("Settings")
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundStyle(Theme.primaryGradient)
-                            .padding(.top, 8)
-
-                        // Apple ID card
-                        VStack(alignment: .leading, spacing: 16) {
-                            HStack {
-                                Image(systemName: "apple.logo")
-                                    .font(.title2)
-                                    .foregroundColor(Theme.textPrimary)
-                                Text("Apple ID")
-                                    .font(.headline)
-                                    .foregroundColor(Theme.textPrimary)
-                                Spacer()
-                                if certs.isLoggedIn {
-                                    Text("Connected")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundColor(Theme.success)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(Theme.success.opacity(0.15))
-                                        .clipShape(Capsule())
-                                }
-                            }
-
-                            if certs.isLoggedIn {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    row("Account", certs.appleID)
-                                    row("Certificate", certs.certName.isEmpty ? "—" : certs.certName)
-                                    if let exp = certs.certExpires {
-                                        row("Expires", exp.formatted(date: .abbreviated, time: .omitted))
-                                    }
-                                    row("Status", certs.certStatusText)
-                                }
-
-                                PurpleButton(title: "Refresh certificate", icon: "arrow.clockwise") {
-                                    certs.refreshCert()
-                                }
-
-                                PurpleButton(title: "Disconnect", icon: "rectangle.portrait.and.arrow.right", style: .secondary) {
-                                    showLogout = true
-                                }
-                            } else {
-                                Text("Sign in with a free Apple ID. Certificate lasts ~7 days — refresh from here or via AltStore/SideStore.")
-                                    .font(.subheadline)
-                                    .foregroundColor(Theme.textSecondary)
-
-                                PurpleTextField(placeholder: "Apple ID (email)", text: $email)
-                                    .textInputAutocapitalization(.never)
-                                    .keyboardType(.emailAddress)
-
-                                PurpleButton(title: "Connect", icon: "link") {
-                                    certs.login(email: email.isEmpty ? certs.appleID : email)
-                                    email = ""
-                                }
-
-                                if !certs.appleID.isEmpty {
-                                    Button {
-                                        email = certs.appleID
-                                    } label: {
-                                        Text("Use saved: \(certs.appleID)")
-                                            .font(.caption)
-                                            .foregroundColor(Theme.primaryLight)
-                                    }
-                                }
-                            }
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 20) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("PurpleKit")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(Theme.textSecondary)
+                            Text("Settings")
+                                .font(.system(size: 30, weight: .bold))
+                                .foregroundStyle(Theme.primaryGradient)
                         }
-                        .padding(16)
-                        .background(Theme.cardGradient)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                        )
+                        .padding(.top, 8)
+                        .opacity(appear ? 1 : 0)
+                        .offset(y: appear ? 0 : 12)
 
-                        // About sideload
-                        VStack(alignment: .leading, spacing: 12) {
+                        appleIDCard
+                            .opacity(appear ? 1 : 0)
+                            .offset(y: appear ? 0 : 16)
+
+                        pairingCard
+                            .opacity(appear ? 1 : 0)
+                            .offset(y: appear ? 0 : 17)
+
+                        deviceCard
+                            .opacity(appear ? 1 : 0)
+                            .offset(y: appear ? 0 : 18)
+
+                        preferencesCard
+                            .opacity(appear ? 1 : 0)
+                            .offset(y: appear ? 0 : 20)
+
+                        VStack(alignment: .leading, spacing: 14) {
                             SectionHeader(title: "Sideloading", icon: "shippingbox.fill", color: Theme.neon)
 
-                            infoLine(icon: "info.circle", text: "Free Apple ID = 7-day certificate, max 3 apps, 10 app IDs.")
-                            infoLine(icon: "arrow.triangle.2.circlepath", text: "Refresh before expiry or apps stop launching.")
-                            infoLine(icon: "lock.shield", text: "Password is never stored in PurpleKit. Sign only in AltStore / SideStore / Sideloadly.")
+                            infoLine(icon: "info.circle", text: "Install = SideSign + minimuxer (same stack as SideStore).")
+                            infoLine(icon: "lock.iphone", text: "One-time pairing file from computer (iloader / SideStore / Jitterbug).")
+                            infoLine(icon: "network", text: "LocalDevVPN or StosVPN must be ON while installing.")
+                            infoLine(icon: "clock", text: "Free Apple ID: 7-day cert, max 3 apps.")
                         }
+                        .padding(16)
+                        .glassCard(cornerRadius: 18, intensity: 0.8)
+                        .opacity(appear ? 1 : 0)
+                        .offset(y: appear ? 0 : 24)
 
-                        // App info
                         VStack(alignment: .leading, spacing: 12) {
                             SectionHeader(title: "About", icon: "info.circle", color: Theme.textSecondary)
 
                             row("Version", "1.0.0")
                             row("Bundle", "com.kemi579.PurpleKit")
                             row("Min iOS", "16.0")
+                            row("Sign", "SideSign (GPL-3.0)")
+                            row("Install", "minimuxer (AGPL-3.0)")
                         }
                         .padding(16)
-                        .background(Theme.surfaceElevated)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .glassCard(cornerRadius: 18, intensity: 0.75)
+                        .opacity(appear ? 1 : 0)
+                        .offset(y: appear ? 0 : 28)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 32)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 100)
                 }
             }
             .navigationBarHidden(true)
             .onAppear {
-                if email.isEmpty { email = certs.appleID }
+                withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) {
+                    appear = true
+                }
+            }
+            .sheet(isPresented: $showSignIn) {
+                AppleDeveloperPortalSignInView()
+            }
+            .fileImporter(
+                isPresented: $showPairingImporter,
+                allowedContentTypes: [.data, .item],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    do {
+                        try installer.importPairingFile(from: url)
+                        pairingError = nil
+                    } catch {
+                        pairingError = error.localizedDescription
+                    }
+                case .failure(let error):
+                    pairingError = error.localizedDescription
+                }
             }
             .confirmationDialog("Disconnect Apple ID?", isPresented: $showLogout, titleVisibility: .visible) {
                 Button("Disconnect", role: .destructive) {
                     certs.logout()
+                    try? KeychainVault.delete(account: "sidesign-auth-session")
+                    try? KeychainVault.delete(account: "sidesign-development-certificate-p12")
+                    try? KeychainVault.delete(account: "sidesign-development-certificate-password")
                 }
                 Button("Cancel", role: .cancel) {}
             }
         }
+    }
+
+    private var pairingCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Pairing (minimuxer)", icon: "link", color: Theme.neon)
+
+            HStack {
+                Text(installer.hasPairingFile ? "Pairing file imported" : "No pairing file")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(installer.hasPairingFile ? Theme.success : Theme.warning)
+                Spacer()
+                if installer.isMuxerReady {
+                    Text("Muxer ready")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(Theme.success)
+                }
+            }
+
+            Text("Same as SideStore: generate pairing once on a PC (iloader / idevicepair / Jitterbug), then import the .mobiledevicepairing file here.")
+                .font(.caption)
+                .foregroundColor(Theme.textSecondary)
+
+            if let pairingError {
+                Text(pairingError)
+                    .font(.caption)
+                    .foregroundColor(Theme.warning)
+            }
+
+            Button {
+                showPairingImporter = true
+            } label: {
+                Label("Import pairing file", systemImage: "doc.badge.plus")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundColor(.white)
+                    .background(Theme.primaryGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            if installer.hasPairingFile {
+                Button {
+                    try? installer.clearPairingFile()
+                } label: {
+                    Text("Remove pairing file")
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(Theme.error)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(16)
+        .glassCard(cornerRadius: 18)
+    }
+
+    private var appleIDCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Image(systemName: "apple.logo")
+                    .font(.title2)
+                    .foregroundColor(Theme.textPrimary)
+                Text("Apple ID")
+                    .font(.headline)
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                if certs.isLoggedIn {
+                    Text("Connected")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(Theme.success)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background {
+                            Capsule()
+                                .fill(Theme.success.opacity(0.15))
+                                .overlay {
+                                    Capsule()
+                                        .strokeBorder(Theme.success.opacity(0.3), lineWidth: 1)
+                                }
+                        }
+                }
+            }
+
+            if certs.isLoggedIn {
+                VStack(alignment: .leading, spacing: 10) {
+                    row("Account", certs.appleID)
+                    if !certs.teamName.isEmpty {
+                        row("Team", certs.teamName)
+                    }
+                    row("Certificate", certs.certName.isEmpty ? "Not issued yet" : certs.certName)
+                    if let exp = certs.certExpires {
+                        row("Expires", exp.formatted(date: .abbreviated, time: .omitted))
+                    }
+                    row("Status", certs.certStatusText)
+                }
+
+                Button {
+                    showSignIn = true
+                } label: {
+                    Label("Manage sign-in & certificate", systemImage: "person.crop.circle.badge.checkmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundColor(Theme.textPrimary)
+                        .background {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .strokeBorder(Theme.glassStroke, lineWidth: 1)
+                                }
+                        }
+                }
+                .buttonStyle(.plain)
+
+                PurpleButton(
+                    title: "Disconnect",
+                    icon: "rectangle.portrait.and.arrow.right",
+                    style: .secondary
+                ) {
+                    showLogout = true
+                }
+            } else {
+                Text("Sign in with a free Apple ID to request a development certificate. Password is never saved.")
+                    .font(.subheadline)
+                    .foregroundColor(Theme.textSecondary)
+
+                Button {
+                    showSignIn = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "apple.logo")
+                        Text("Sign in with Apple ID")
+                            .fontWeight(.semibold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .foregroundColor(.white)
+                    .background(Theme.primaryGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: Theme.primary.opacity(0.4), radius: 12, x: 0, y: 6)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(16)
+        .glassCard(cornerRadius: 20)
+    }
+
+    private var deviceCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "This device", icon: "iphone", color: Theme.primaryLight)
+
+            Text("UDID (auto-filled from minimuxer when possible)")
+                .font(.caption.weight(.medium))
+                .foregroundColor(Theme.textSecondary)
+
+            TextField("00008110-001A2B3C4D5E6F70", text: $signer.deviceUDID)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.system(size: 13, design: .monospaced))
+                .padding(12)
+                .background {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Theme.glassStroke, lineWidth: 1)
+                        }
+                }
+                .foregroundColor(Theme.textPrimary)
+
+            Text("Or paste from Finder / Xcode if muxer has not filled it yet.")
+                .font(.caption2)
+                .foregroundColor(Theme.textTertiary)
+        }
+        .padding(16)
+        .glassCard(cornerRadius: 18)
+    }
+
+    private var preferencesCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeader(title: "Preferences", icon: "slider.horizontal.3", color: Theme.accent)
+
+            NavigationLink {
+                AnisetteServerSettingsView()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(Theme.accent)
+                        .frame(width: 36, height: 36)
+                        .background {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Theme.accent.opacity(0.14))
+                        }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Anisette catalog")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(Theme.textPrimary)
+                        Text("Servers list & health check")
+                            .font(.caption)
+                            .foregroundColor(Theme.textSecondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(Theme.textTertiary)
+                }
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            HStack {
+                Label("Appearance", systemImage: "moon.fill")
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Text("Dark")
+                    .font(.subheadline)
+                    .foregroundColor(Theme.textSecondary)
+            }
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            HStack {
+                Label("Haptics", systemImage: "hand.tap.fill")
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                Text("On")
+                    .font(.subheadline)
+                    .foregroundColor(Theme.textSecondary)
+            }
+        }
+        .padding(16)
+        .glassCard(cornerRadius: 18)
     }
 
     private func row(_ title: String, _ value: String) -> some View {
