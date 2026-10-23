@@ -8,6 +8,11 @@ import SideSign
 /// 2) start minimuxer with pairing file + local VPN
 /// 3) send IPA over AFC
 /// 4) install via InstallationProxy (`installIpa`)
+///
+/// Pairing file CANNOT be generated purely "from the phone body" inside a sandboxed app.
+/// Apple stores lockdown pairing secrets outside the app sandbox. Same limitation as SideStore:
+/// you need a one-time host pair (PC/Mac via iloader/Jitterbug/SideStore) OR a wireless-pair
+/// session that writes a pairing file into Documents.
 @MainActor
 final class DeviceInstaller: ObservableObject {
     static let shared = DeviceInstaller()
@@ -24,8 +29,17 @@ final class DeviceInstaller: ObservableObject {
     private static let pairingFileName = "PurpleKit.mobiledevicepairing"
 
     private init() {
-        hasPairingFile = (try? pairingFileURL()) != nil
-            && fm.fileExists(atPath: (try? pairingFileURL().path) ?? "")
+        refreshPairingState()
+        // Best-effort: if user already has SideStore pairing in the app group / Files copy path, ignore.
+        // Sandbox cannot read SideStore's container. Only our Documents.
+    }
+
+    func refreshPairingState() {
+        if let url = try? pairingFileURL(), fm.fileExists(atPath: url.path) {
+            hasPairingFile = true
+        } else {
+            hasPairingFile = false
+        }
     }
 
     // MARK: - Pairing file
@@ -62,7 +76,6 @@ final class DeviceInstaller: ObservableObject {
 
     // MARK: - Minimuxer lifecycle
 
-    /// Start minimuxer (needs LocalDevVPN / StosVPN connected, like SideStore).
     func startMuxer() async throws {
         status = "Starting minimuxer…"
         let pairing = try pairingFileURL()
@@ -74,7 +87,6 @@ final class DeviceInstaller: ObservableObject {
         let mountPath = docs.appendingPathComponent("DDI", isDirectory: true)
         try fm.createDirectory(at: mountPath, withIntermediateDirectories: true)
 
-        // Network observer (VPN / utun discovery)
         _ = await Minimuxer.shared.network.start()
 
         try await Minimuxer.shared.core.start(
@@ -105,9 +117,8 @@ final class DeviceInstaller: ObservableObject {
         }
     }
 
-    // MARK: - Sign + install (SideStore flow)
+    // MARK: - Sign + install
 
-    /// Full pipeline: sign IPA → AFC push → installIpa.
     func signAndInstall(ipaURL: URL) async throws {
         isWorking = true
         defer { isWorking = false }
@@ -140,7 +151,6 @@ final class DeviceInstaller: ObservableObject {
         status = "Installed \(bundleID). Check Home Screen."
     }
 
-    /// Install an already-signed IPA (skip re-sign).
     func installSigned(ipaURL: URL, bundleID: String) async throws {
         isWorking = true
         defer { isWorking = false }
@@ -157,8 +167,6 @@ final class DeviceInstaller: ObservableObject {
         try await Minimuxer.shared.core.installIpa(bundleId: bundleID)
         status = "Installed \(bundleID)."
     }
-
-    // MARK: - Helpers
 
     private func readBundleID(fromSignedIPA ipaURL: URL) throws -> String {
         let work = fm.temporaryDirectory.appendingPathComponent("pk-bid-\(UUID().uuidString)", isDirectory: true)
@@ -183,9 +191,9 @@ final class DeviceInstaller: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .missingPairingFile:
-                return "Import a pairing file first (Settings → Pairing). Generate it once with SideStore/iloader/Jitterbug on a computer."
+                return "Pairing file is not on the phone for apps to read. Import .mobiledevicepairing once from PC (iloader / SideStore / Jitterbug) — same as SideStore. Cannot auto-take it from the device sandbox."
             case .deviceNotReachable:
-                return "Device not reachable via minimuxer. Connect LocalDevVPN or StosVPN (same as SideStore)."
+                return "Device not reachable via minimuxer. Connect LocalDevVPN or StosVPN."
             case .muxerFailed(let msg):
                 return "Minimuxer: \(msg)"
             case .missingBundleID:
