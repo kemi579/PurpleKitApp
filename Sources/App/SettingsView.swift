@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var certs: CertificateStore
-    @State private var email = ""
+    @State private var showSignIn = false
     @State private var showLogout = false
 
     var body: some View {
@@ -23,7 +23,7 @@ struct SettingsView: View {
                         }
                         .padding(.top, 8)
 
-                        // Apple ID card
+                        // ── Apple ID — always on top ──
                         VStack(alignment: .leading, spacing: 16) {
                             HStack {
                                 Image(systemName: "apple.logo")
@@ -53,74 +53,67 @@ struct SettingsView: View {
                             if certs.isLoggedIn {
                                 VStack(alignment: .leading, spacing: 10) {
                                     row("Account", certs.appleID)
-                                    row("Certificate", certs.certName.isEmpty ? "—" : certs.certName)
+                                    if !certs.teamName.isEmpty {
+                                        row("Team", certs.teamName)
+                                    }
+                                    row("Certificate", certs.certName.isEmpty ? "Not issued yet" : certs.certName)
                                     if let exp = certs.certExpires {
                                         row("Expires", exp.formatted(date: .abbreviated, time: .omitted))
                                     }
                                     row("Status", certs.certStatusText)
                                 }
 
-                                PurpleButton(title: "Certificate refresh unavailable", icon: "info.circle", style: .glass) {
-                                    certs.refreshCert()
+                                Button {
+                                    showSignIn = true
+                                } label: {
+                                    Label("Manage sign-in & certificate", systemImage: "person.crop.circle.badge.checkmark")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .foregroundColor(Theme.textPrimary)
+                                        .background {
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .fill(Color.white.opacity(0.06))
+                                                .overlay {
+                                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                        .strokeBorder(Theme.glassStroke, lineWidth: 1)
+                                                }
+                                        }
                                 }
+                                .buttonStyle(.plain)
 
-                                PurpleButton(title: "Disconnect", icon: "rectangle.portrait.and.arrow.right", style: .secondary) {
+                                PurpleButton(
+                                    title: "Disconnect",
+                                    icon: "rectangle.portrait.and.arrow.right",
+                                    style: .secondary
+                                ) {
                                     showLogout = true
                                 }
                             } else {
-                                Text("Use Apple Developer Portal sign-in to authenticate with Apple ID, complete 2FA, load teams, and request a development certificate.")
+                                Text("Sign in with a free Apple ID to request a development certificate for sideloading. Password is never saved.")
                                     .font(.subheadline)
                                     .foregroundColor(Theme.textSecondary)
 
-                                PurpleTextField(placeholder: "Apple ID (email)", text: $email)
-                                    .textInputAutocapitalization(.never)
-                                    .keyboardType(.emailAddress)
-
-                                PurpleButton(title: "Save email only", icon: "envelope", style: .glass) {
-                                    certs.login(email: email.isEmpty ? certs.appleID : email)
-                                    email = ""
-                                }
-
-                                if !certs.appleID.isEmpty {
-                                    Button {
-                                        email = certs.appleID
-                                    } label: {
-                                        Text("Use saved: \(certs.appleID)")
-                                            .font(.caption)
-                                            .foregroundColor(Theme.primaryLight)
+                                Button {
+                                    showSignIn = true
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "apple.logo")
+                                        Text("Sign in with Apple ID")
+                                            .fontWeight(.semibold)
                                     }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 15)
+                                    .foregroundColor(.white)
+                                    .background(Theme.primaryGradient)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .shadow(color: Theme.primary.opacity(0.4), radius: 12, x: 0, y: 6)
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
                         .padding(16)
                         .glassCard(cornerRadius: 20)
-
-                        // Navigation links
-                        VStack(spacing: 12) {
-                            NavigationLink {
-                                AppleDeveloperPortalSignInView()
-                            } label: {
-                                GlassLinkCard(
-                                    icon: "person.crop.circle.badge.checkmark",
-                                    title: "Apple ID sign-in & 2FA",
-                                    subtitle: "Apple ID + 2FA + development certificate",
-                                    iconColor: Theme.neon
-                                )
-                            }
-                            .buttonStyle(.plain)
-
-                            NavigationLink {
-                                AnisetteServerSettingsView()
-                            } label: {
-                                GlassLinkCard(
-                                    icon: "server.rack",
-                                    title: "Anisette servers",
-                                    subtitle: "Configure a SideStore-compatible catalog URL",
-                                    iconColor: Theme.accent
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
 
                         // Sideloading info
                         VStack(alignment: .leading, spacing: 14) {
@@ -128,7 +121,7 @@ struct SettingsView: View {
 
                             infoLine(icon: "info.circle", text: "Free Apple ID = 7-day certificate, max 3 apps, 10 app IDs.")
                             infoLine(icon: "arrow.triangle.2.circlepath", text: "Refresh before expiry or apps stop launching.")
-                            infoLine(icon: "lock.shield", text: "Auth & cert requests use SideSign; IPA signing and install are separate steps.")
+                            infoLine(icon: "lock.shield", text: "Auth uses SideSign + Anisette. Pick a server from the list on the sign-in screen.")
                         }
                         .padding(16)
                         .glassCard(cornerRadius: 18, intensity: 0.8)
@@ -149,12 +142,17 @@ struct SettingsView: View {
                 }
             }
             .navigationBarHidden(true)
-            .onAppear {
-                if email.isEmpty { email = certs.appleID }
+            .sheet(isPresented: $showSignIn) {
+                AppleDeveloperPortalSignInView()
             }
             .confirmationDialog("Disconnect Apple ID?", isPresented: $showLogout, titleVisibility: .visible) {
                 Button("Disconnect", role: .destructive) {
+                    // Clear local store; SideSign session is cleared inside the sign-in view on next open or via shared sign-out.
                     certs.logout()
+                    // Also wipe Keychain session so next open is clean
+                    try? KeychainVault.delete(account: "sidesign-auth-session")
+                    try? KeychainVault.delete(account: "sidesign-development-certificate-p12")
+                    try? KeychainVault.delete(account: "sidesign-development-certificate-password")
                 }
                 Button("Cancel", role: .cancel) {}
             }

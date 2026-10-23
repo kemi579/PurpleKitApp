@@ -12,6 +12,7 @@ final class CertificateStore: ObservableObject {
     @Published private(set) var certName = ""
     @Published private(set) var certExpires: Date?
     @Published private(set) var lastRefresh: Date?
+    @Published private(set) var teamName = ""
 
     private enum Keys {
         static let appleID = "PurpleKit.appleID"
@@ -19,17 +20,18 @@ final class CertificateStore: ObservableObject {
         static let certName = "PurpleKit.certName"
         static let certExpires = "PurpleKit.certExpires"
         static let lastRefresh = "PurpleKit.lastRefresh"
+        static let teamName = "PurpleKit.teamName"
     }
 
     private init() {
         appleID = UserDefaults.standard.string(forKey: Keys.appleID) ?? ""
-
-        // Remove legacy placeholder state from older builds. Those values were
-        // generated locally and did not represent an Apple-issued certificate.
-        UserDefaults.standard.set(false, forKey: Keys.loggedIn)
-        UserDefaults.standard.removeObject(forKey: Keys.certName)
-        UserDefaults.standard.removeObject(forKey: Keys.certExpires)
-        UserDefaults.standard.removeObject(forKey: Keys.lastRefresh)
+        // Do not restore fake "logged in" state from older builds.
+        // Real session is restored by SideSignAppleAccountProvider from Keychain.
+        isLoggedIn = false
+        certName = ""
+        certExpires = nil
+        lastRefresh = nil
+        teamName = ""
     }
 
     var daysLeft: Int? {
@@ -38,22 +40,44 @@ final class CertificateStore: ObservableObject {
     }
 
     var certStatusText: String {
-        "Not authenticated — real Apple ID sign-in is not available yet"
+        if !isLoggedIn {
+            return "Not signed in"
+        }
+        if let days = daysLeft, !certName.isEmpty {
+            return days > 0 ? "Cert · \(days)d left" : "Cert expired"
+        }
+        if isLoggedIn && certName.isEmpty {
+            return "Signed in · no cert yet"
+        }
+        return "Signed in"
     }
 
-    var isCertHealthy: Bool { false }
-
-    /// Saves the email as a convenience only. This does not sign in to Apple.
-    func login(email: String) {
-        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        appleID = trimmed
-        Haptic.light()
+    var isCertHealthy: Bool {
+        guard isLoggedIn, !certName.isEmpty, let days = daysLeft else { return false }
+        return days > 1
     }
 
-    /// Deliberately does not extend expiry or claim a certificate was refreshed.
-    func refreshCert() {
-        Haptic.light()
+    /// Called after a real SideSign authentication succeeds.
+    func applyAuthenticatedSession(email: String, team: String?) {
+        appleID = email
+        isLoggedIn = true
+        teamName = team ?? ""
+        UserDefaults.standard.set(true, forKey: Keys.loggedIn)
+        UserDefaults.standard.set(teamName, forKey: Keys.teamName)
+        Haptic.success()
+    }
+
+    /// Called after a development certificate is issued and stored in Keychain.
+    func applyCertificate(name: String, expires: Date?) {
+        certName = name
+        certExpires = expires
+        lastRefresh = Date()
+        UserDefaults.standard.set(name, forKey: Keys.certName)
+        if let expires {
+            UserDefaults.standard.set(expires.timeIntervalSince1970, forKey: Keys.certExpires)
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Keys.lastRefresh)
+        Haptic.success()
     }
 
     func logout() {
@@ -61,10 +85,17 @@ final class CertificateStore: ObservableObject {
         certName = ""
         certExpires = nil
         lastRefresh = nil
+        teamName = ""
         UserDefaults.standard.set(false, forKey: Keys.loggedIn)
         UserDefaults.standard.removeObject(forKey: Keys.certName)
         UserDefaults.standard.removeObject(forKey: Keys.certExpires)
         UserDefaults.standard.removeObject(forKey: Keys.lastRefresh)
+        UserDefaults.standard.removeObject(forKey: Keys.teamName)
+        Haptic.light()
+    }
+
+    /// No-op placeholder; real refresh is done via SideSign on the sign-in screen.
+    func refreshCert() {
         Haptic.light()
     }
 }

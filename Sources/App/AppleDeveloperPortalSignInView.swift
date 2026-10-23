@@ -8,7 +8,8 @@ import SideSign
 final class SideSignAppleAccountProvider: ObservableObject {
     @Published var appleID = ""
     @Published var password = ""
-    @Published var anisetteServer = ""
+    /// Selected Anisette server address (HTTPS URL from catalog).
+    @Published var selectedServerAddress = ""
     @Published private(set) var isBusy = false
     @Published private(set) var status = "Not signed in"
     @Published private(set) var account: Account?
@@ -27,55 +28,77 @@ final class SideSignAppleAccountProvider: ObservableObject {
     private let anisette = AnisetteDataManager.shared
     private let portal = DeveloperPortal.shared
 
+    private static let selectedServerKey = "PurpleKit.selectedAnisetteServer"
+
     init() {
         appleID = (try? KeychainVault.load(account: "apple-id-email")).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        anisetteServer = UserDefaults.standard.string(forKey: "PurpleKit.selectedAnisetteServer") ?? ""
+        selectedServerAddress = UserDefaults.standard.string(forKey: Self.selectedServerKey) ?? ""
+
+        // Restore certificate metadata if present in Keychain
+        if (try? KeychainVault.load(account: "sidesign-development-certificate-p12")) != nil {
+            hasCertificate = true
+            certificateName = UserDefaults.standard.string(forKey: "PurpleKit.certName") ?? "Development certificate"
+            let exp = UserDefaults.standard.double(forKey: "PurpleKit.certExpires")
+            if exp > 0 { certificateExpires = Date(timeIntervalSince1970: exp) }
+        }
+
         if let data = try? KeychainVault.load(account: "sidesign-auth-session"),
            let session = try? JSONDecoder().decode(AuthSession.self, from: data),
            session.session.isValid {
             authSession = session
             account = session.account
             status = "Session restored for \(session.account.appleID)."
+            CertificateStore.shared.applyAuthenticatedSession(
+                email: session.account.appleID,
+                team: nil
+            )
+            if hasCertificate {
+                CertificateStore.shared.applyCertificate(name: certificateName, expires: certificateExpires)
+            }
             Task { await loadTeams() }
         }
     }
 
     var canSignIn: Bool {
-        !isBusy && !appleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !password.isEmpty && validAnisetteURL != nil
+        !isBusy &&
+        !appleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !password.isEmpty &&
+        validAnisetteURL != nil
     }
 
     private var validAnisetteURL: URL? {
-        guard let url = URL(string: anisetteServer.trimmingCharacters(in: .whitespacesAndNewlines)),
-              url.scheme?.lowercased() == "https", url.host != nil,
-              url.user == nil, url.password == nil else { return nil }
+        guard let url = URL(string: selectedServerAddress.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme?.lowercased() == "https",
+              url.host != nil,
+              url.user == nil,
+              url.password == nil else { return nil }
         return url
     }
 
     func signIn() async {
         guard canSignIn, let serverURL = validAnisetteURL else {
-            status = "Enter your Apple ID, password, and a trusted HTTPS Anisette server URL."
+            status = "Enter Apple ID, password, and pick an Anisette server."
             return
         }
         isBusy = true
-        status = "Preparing Anisette data…"
+        status = "Fetching Anisette data…"
         defer {
             isBusy = false
             password = ""
         }
-        UserDefaults.standard.set(serverURL.absoluteString, forKey: "PurpleKit.selectedAnisetteServer")
+        UserDefaults.standard.set(serverURL.absoluteString, forKey: Self.selectedServerKey)
         do {
             let (anisetteData, _) = try await anisette.fetchAnisetteData(
                 mode: .remote(server: serverURL),
                 identifier: UUID()
             )
-            status = "Authenticating directly with Apple…"
+            status = "Signing in with Apple…"
             let credentialsPassword = password
             let result = try await portal.authenticate(
                 appleID: appleID,
                 password: credentialsPassword,
                 anisetteData: anisetteData,
-                xcodeVersion: "26.0",
+                xcodeVersion: "16.0",
                 verificationHandler: { [weak self] request in
                     guard let self else { return .cancel }
                     return await self.handleVerification(request)
@@ -85,7 +108,11 @@ final class SideSignAppleAccountProvider: ObservableObject {
             account = result.account
             try KeychainVault.save(Data(appleID.trimmingCharacters(in: .whitespacesAndNewlines).utf8), account: "apple-id-email")
             try KeychainVault.save(try JSONEncoder().encode(result), account: "sidesign-auth-session")
-            status = "Apple authentication succeeded. Loading development teams…"
+            CertificateStore.shared.applyAuthenticatedSession(
+                email: result.account.appleID,
+                team: nil
+            )
+            status = "Signed in. Loading teams…"
             await loadTeams()
         } catch {
             status = Self.safeError(error)
@@ -93,6 +120,7 @@ final class SideSignAppleAccountProvider: ObservableObject {
             account = nil
             teams = []
             try? KeychainVault.delete(account: "sidesign-auth-session")
+            CertificateStore.shared.logout()
         }
     }
 
@@ -161,15 +189,21 @@ final class SideSignAppleAccountProvider: ObservableObject {
         do {
             teams = try await portal.fetchTeams(for: authSession.account, session: authSession.session)
             if selectedTeamID.isEmpty { selectedTeamID = teams.first?.identifier ?? "" }
-            status = "Signed in as \(authSession.account.appleID). Found \(teams.count) team(s)."
+            let teamLabel = teams.first(where: { $0.identifier == selectedTeamID })?.name
+            CertificateStore.shared.applyAuthenticatedSession(
+                email: authSession.account.appleID,
+                team: teamLabel
+            )
+            status = "Signed in as \(authSession.account.appleID). \(teams.count) team(s)."
         } catch {
             status = "Signed in, but team loading failed: \(Self.safeError(error))"
         }
     }
 
     func createDevelopmentCertificate() async {
-        guard let authSession, let team = teams.first(where: { $0.identifier == selectedTeamID }) else {
-            status = "Sign in and select a development team first."
+        guard let authSession,
+              let team = teams.first(where: { $0.identifier == selectedTeamID }) else {
+            status = "Sign in and select a team first."
             return
         }
         isBusy = true
@@ -188,7 +222,12 @@ final class SideSignAppleAccountProvider: ObservableObject {
             certificateName = keyStore.certificate.name
             certificateExpires = keyStore.certificate.expiryDate
             hasCertificate = true
-            status = "Apple issued a development certificate and its private key was saved to this device's Keychain."
+            CertificateStore.shared.applyCertificate(name: certificateName, expires: certificateExpires)
+            CertificateStore.shared.applyAuthenticatedSession(
+                email: authSession.account.appleID,
+                team: team.name
+            )
+            status = "Development certificate issued and saved to Keychain."
         } catch {
             status = "Certificate request failed: \(Self.safeError(error))"
         }
@@ -205,105 +244,370 @@ final class SideSignAppleAccountProvider: ObservableObject {
         try? KeychainVault.delete(account: "sidesign-auth-session")
         try? KeychainVault.delete(account: "sidesign-development-certificate-p12")
         try? KeychainVault.delete(account: "sidesign-development-certificate-password")
-        status = "Signed out. Saved session and certificate removed."
+        CertificateStore.shared.logout()
+        status = "Signed out. Session and certificate removed."
     }
 
     private static func safeError(_ error: Error) -> String {
         if let error = error as? LocalizedError, let message = error.errorDescription {
             return String(message.prefix(400))
         }
-        return "Authentication failed. Check the network, Anisette server, and Apple account settings."
+        return "Authentication failed. Check network, Anisette server, and Apple account."
     }
 }
+
+// MARK: - Sign-in screen
 
 struct AppleDeveloperPortalSignInView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model = SideSignAppleAccountProvider()
-    @State private var showingPassword = false
+    @StateObject private var catalog = AnisetteServerCatalog.shared
+    @State private var showServerList = false
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Theme.background.ignoresSafeArea()
-                ScrollView {
+
+                Circle()
+                    .fill(Theme.primary.opacity(0.2))
+                    .frame(width: 260, height: 260)
+                    .blur(radius: 80)
+                    .offset(x: -70, y: -140)
+                    .ignoresSafeArea()
+
+                ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 18) {
-                        Image(systemName: "apple.logo")
-                            .font(.system(size: 38, weight: .medium))
-                            .foregroundStyle(Theme.primaryGradient)
-                            .frame(maxWidth: .infinity).padding(.top, 20)
-                        Text("Apple Developer Portal")
-                            .font(.title2.bold()).foregroundStyle(Theme.textPrimary)
-                            .frame(maxWidth: .infinity)
-                        Text("Signs in to Apple using SideSign, supports Apple 2FA, loads teams, and can request an Apple Development certificate. Your password is never saved. Use only an Anisette server you trust; it supplies request metadata, while the login exchange is sent to Apple.")
-                            .font(.subheadline).foregroundStyle(Theme.textSecondary)
-                        VStack(spacing: 12) {
-                            TextField("Apple ID email", text: $model.appleID)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .keyboardType(.emailAddress).textFieldStyle(.roundedBorder)
+                        // Hero
+                        VStack(spacing: 10) {
+                            Image(systemName: "apple.logo")
+                                .font(.system(size: 40, weight: .medium))
+                                .foregroundStyle(Theme.primaryGradient)
+                            Text("Apple ID")
+                                .font(.title2.bold())
+                                .foregroundStyle(Theme.textPrimary)
+                            Text("Sign in · 2FA · development certificate")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 12)
+
+                        // Credentials card
+                        VStack(alignment: .leading, spacing: 14) {
+                            fieldLabel("Apple ID")
+                            TextField("email@icloud.com", text: $model.appleID)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .keyboardType(.emailAddress)
+                                .padding(14)
+                                .background(fieldBg)
+                                .foregroundColor(Theme.textPrimary)
+
+                            fieldLabel("Password")
                             SecureField("Apple ID password", text: $model.password)
-                                .textFieldStyle(.roundedBorder)
-                            TextField("Trusted Anisette HTTPS server URL", text: $model.anisetteServer)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .keyboardType(.URL).textFieldStyle(.roundedBorder)
+                                .padding(14)
+                                .background(fieldBg)
+                                .foregroundColor(Theme.textPrimary)
+
+                            // Anisette server — expandable picker
+                            fieldLabel("Anisette server")
+                            Button {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    showServerList.toggle()
+                                }
+                                if catalog.servers.isEmpty {
+                                    Task { await catalog.refresh() }
+                                }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(selectedServerName)
+                                            .font(.system(size: 15, weight: .medium))
+                                            .foregroundColor(Theme.textPrimary)
+                                            .lineLimit(1)
+                                        if !model.selectedServerAddress.isEmpty {
+                                            Text(model.selectedServerAddress)
+                                                .font(.system(size: 11, design: .monospaced))
+                                                .foregroundColor(Theme.textSecondary)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    Spacer()
+                                    Image(systemName: showServerList ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(Theme.primaryLight)
+                                }
+                                .padding(14)
+                                .background(fieldBg)
+                            }
+                            .buttonStyle(.plain)
+
+                            if showServerList {
+                                VStack(spacing: 0) {
+                                    if catalog.isLoading {
+                                        HStack {
+                                            ProgressView().controlSize(.small)
+                                            Text("Loading servers…")
+                                                .font(.caption)
+                                                .foregroundColor(Theme.textSecondary)
+                                        }
+                                        .padding(14)
+                                    } else if catalog.servers.isEmpty {
+                                        Text(catalog.lastError ?? "No servers. Pull to refresh.")
+                                            .font(.caption)
+                                            .foregroundColor(Theme.warning)
+                                            .padding(14)
+                                    } else {
+                                        ForEach(catalog.servers) { server in
+                                            Button {
+                                                model.selectedServerAddress = server.address
+                                                withAnimation { showServerList = false }
+                                            } label: {
+                                                HStack {
+                                                    VStack(alignment: .leading, spacing: 2) {
+                                                        Text(server.name)
+                                                            .font(.system(size: 14, weight: .semibold))
+                                                            .foregroundColor(Theme.textPrimary)
+                                                        Text(server.address)
+                                                            .font(.system(size: 11, design: .monospaced))
+                                                            .foregroundColor(Theme.textSecondary)
+                                                            .lineLimit(1)
+                                                    }
+                                                    Spacer()
+                                                    if model.selectedServerAddress == server.address {
+                                                        Image(systemName: "checkmark.circle.fill")
+                                                            .foregroundColor(Theme.primaryLight)
+                                                    }
+                                                }
+                                                .padding(.horizontal, 14)
+                                                .padding(.vertical, 12)
+                                                .contentShape(Rectangle())
+                                            }
+                                            .buttonStyle(.plain)
+
+                                            if server.id != catalog.servers.last?.id {
+                                                Divider().overlay(Color.white.opacity(0.08))
+                                            }
+                                        }
+                                    }
+
+                                    Divider().overlay(Color.white.opacity(0.1))
+
+                                    Button {
+                                        Task { await catalog.refresh() }
+                                    } label: {
+                                        HStack {
+                                            Image(systemName: "arrow.clockwise")
+                                            Text("Refresh list")
+                                        }
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundColor(Theme.primaryLight)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(12)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(catalog.isLoading)
+                                }
+                                .background {
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.white.opacity(0.04))
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .strokeBorder(Theme.glassStroke, lineWidth: 1)
+                                        }
+                                }
+                            }
+
+                            // Sign in button
                             Button {
                                 Task { await model.signIn() }
                             } label: {
-                                HStack {
-                                    if model.isBusy { ProgressView().tint(.white) }
-                                    Text(model.isBusy ? "Connecting…" : "Sign in with Apple ID").fontWeight(.semibold)
-                                }.frame(maxWidth: .infinity).padding(14)
-                                    .background(Theme.primaryGradient).foregroundStyle(.white)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }.disabled(!model.canSignIn)
-                        }
-                        if !model.teams.isEmpty {
-                            Text("Developer teams").font(.headline).foregroundStyle(Theme.textPrimary)
-                            Picker("Team", selection: $model.selectedTeamID) {
-                                ForEach(model.teams, id: \.identifier) { team in
-                                    Text("\(team.name) (\(team.type.displayName))").tag(team.identifier)
+                                HStack(spacing: 8) {
+                                    if model.isBusy {
+                                        ProgressView().tint(.white)
+                                    } else {
+                                        Image(systemName: "apple.logo")
+                                    }
+                                    Text(model.isBusy ? "Connecting…" : "Sign in")
+                                        .fontWeight(.semibold)
                                 }
-                            }.pickerStyle(.menu).tint(Theme.primaryLight)
-                            Button {
-                                Task { await model.createDevelopmentCertificate() }
-                            } label: {
-                                Label(model.hasCertificate ? "Create another development certificate" : "Request development certificate", systemImage: "checkmark.seal")
-                                    .frame(maxWidth: .infinity).padding(12)
-                            }.buttonStyle(.borderedProminent).tint(Theme.primaryLight).disabled(model.isBusy)
-                        }
-                        if model.hasCertificate {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("Certificate saved securely").font(.headline)
-                                Text(model.certificateName)
-                                if let expiry = model.certificateExpires {
-                                    Text("Expires \(expiry.formatted(date: .abbreviated, time: .omitted))")
-                                }
-                            }.foregroundStyle(Theme.textPrimary).padding(12)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Theme.surfaceElevated).clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        Text(model.status).font(.subheadline).foregroundStyle(Theme.textSecondary)
-                            .textSelection(.enabled)
-                        if model.account != nil {
-                            Button("Sign out and remove saved session", role: .destructive) {
-                                model.signOut()
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 15)
+                                .foregroundColor(.white)
+                                .background(Theme.primaryGradient)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .shadow(color: Theme.primary.opacity(0.4), radius: 10, x: 0, y: 5)
                             }
+                            .buttonStyle(.plain)
+                            .disabled(!model.canSignIn)
+                            .opacity(model.canSignIn ? 1 : 0.55)
                         }
-                    }.padding(20)
+                        .padding(16)
+                        .glassCard(cornerRadius: 20)
+
+                        // Teams + cert (after sign-in)
+                        if !model.teams.isEmpty {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Developer team")
+                                    .font(.headline)
+                                    .foregroundColor(Theme.textPrimary)
+
+                                Picker("Team", selection: $model.selectedTeamID) {
+                                    ForEach(model.teams, id: \.identifier) { team in
+                                        Text("\(team.name) (\(team.type.displayName))")
+                                            .tag(team.identifier)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .tint(Theme.primaryLight)
+                                .padding(12)
+                                .background(fieldBg)
+
+                                Button {
+                                    Task { await model.createDevelopmentCertificate() }
+                                } label: {
+                                    HStack {
+                                        if model.isBusy {
+                                            ProgressView().tint(.white)
+                                        } else {
+                                            Image(systemName: "checkmark.seal.fill")
+                                        }
+                                        Text(model.hasCertificate
+                                              ? "Request another certificate"
+                                              : "Request development certificate")
+                                            .fontWeight(.semibold)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .foregroundColor(.white)
+                                    .background(Theme.neonGradient)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(model.isBusy)
+
+                                if model.hasCertificate {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Label("Certificate in Keychain", systemImage: "lock.shield.fill")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundColor(Theme.success)
+                                        Text(model.certificateName)
+                                            .font(.caption.monospaced())
+                                            .foregroundColor(Theme.textPrimary)
+                                        if let expiry = model.certificateExpires {
+                                            Text("Expires \(expiry.formatted(date: .abbreviated, time: .omitted))")
+                                                .font(.caption)
+                                                .foregroundColor(Theme.textSecondary)
+                                        }
+                                    }
+                                    .padding(12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .fill(Theme.success.opacity(0.1))
+                                            .overlay {
+                                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                    .strokeBorder(Theme.success.opacity(0.25), lineWidth: 1)
+                                            }
+                                    }
+                                }
+                            }
+                            .padding(16)
+                            .glassCard(cornerRadius: 18)
+                        }
+
+                        // Status
+                        Text(model.status)
+                            .font(.subheadline)
+                            .foregroundColor(Theme.textSecondary)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 4)
+
+                        if model.account != nil {
+                            Button(role: .destructive) {
+                                model.signOut()
+                            } label: {
+                                Text("Sign out and remove session")
+                                    .font(.subheadline.weight(.medium))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(Theme.error)
+                        }
+
+                        Text("Password is never saved. Anisette only supplies device metadata — login goes to Apple. Free Apple ID certificates last ~7 days.")
+                            .font(.caption2)
+                            .foregroundColor(Theme.textTertiary)
+                            .padding(.bottom, 20)
+                    }
+                    .padding(20)
                 }
             }
-            .navigationTitle("Apple ID").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
-            .alert(model.verificationPrompt ?? "Apple verification", isPresented: Binding(
-                get: { model.verificationPrompt != nil },
-                set: { if !$0 { model.cancelVerification() } }
-            )) {
-                TextField("Verification code (if requested)", text: $model.verificationCode)
+            .navigationTitle("Sign in")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundColor(Theme.primaryLight)
+                }
+            }
+            .task {
+                if catalog.servers.isEmpty {
+                    await catalog.refresh()
+                }
+                // Auto-select first server if none chosen
+                if model.selectedServerAddress.isEmpty,
+                   let first = catalog.servers.first {
+                    model.selectedServerAddress = first.address
+                }
+            }
+            .alert(
+                model.verificationPrompt ?? "Apple verification",
+                isPresented: Binding(
+                    get: { model.verificationPrompt != nil },
+                    set: { if !$0 { model.cancelVerification() } }
+                )
+            ) {
+                TextField("Verification code", text: $model.verificationCode)
                     .keyboardType(.numberPad)
                 Button("Continue") { model.submitVerification() }
                 Button("Cancel", role: .cancel) { model.cancelVerification() }
             } message: {
-                Text("For SMS or voice, enter the code. For trusted-device verification, approve the request first and then continue.")
+                Text("For SMS/voice enter the code. For trusted device, approve on your device then continue.")
             }
         }
+        .preferredColorScheme(.dark)
+    }
+
+    private var selectedServerName: String {
+        if let match = catalog.servers.first(where: { $0.address == model.selectedServerAddress }) {
+            return match.name
+        }
+        if model.selectedServerAddress.isEmpty {
+            return "Select a server"
+        }
+        return "Custom server"
+    }
+
+    private var fieldBg: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .opacity(0.7)
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Theme.glassStroke, lineWidth: 1)
+            }
+    }
+
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundColor(Theme.textSecondary)
     }
 }
