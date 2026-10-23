@@ -1,9 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// Stores only the user's Apple ID email and genuine status values.
-/// Authentication, certificate creation and certificate refresh are intentionally
-/// unavailable until the real SideSign flow is integrated.
+@MainActor
 final class CertificateStore: ObservableObject {
     static let shared = CertificateStore()
 
