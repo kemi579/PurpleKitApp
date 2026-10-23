@@ -71,7 +71,6 @@ struct MainTabView: View {
         .padding(.top, 10)
         .padding(.bottom, 8)
         .background {
-            // Soft fade into content
             LinearGradient(
                 colors: [
                     Theme.background.opacity(0),
@@ -98,7 +97,7 @@ struct MainTabView: View {
             HStack(spacing: 8) {
                 Image(systemName: symbol)
                     .font(.system(size: 16, weight: .semibold))
-                    .symbolEffect(.bounce, value: isSelected)
+                    .scaleEffect(isSelected ? 1.05 : 1.0)
 
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
