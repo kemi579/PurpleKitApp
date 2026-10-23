@@ -186,6 +186,19 @@ struct IPAImportView: View {
             throw ImportError.notIPA
         }
 
+        // An .ipa is a ZIP archive. Check its file signature before copying so
+        // arbitrary files renamed to .ipa are not silently added to the library.
+        let handle = try FileHandle(forReadingFrom: sourceURL)
+        defer { try? handle.close() }
+        let signature = try handle.read(upToCount: 4) ?? Data()
+        guard signature.count == 4,
+              signature[signature.startIndex] == 0x50,
+              signature[signature.startIndex + 1] == 0x4B,
+              [0x03, 0x05, 0x07].contains(signature[signature.startIndex + 2]),
+              [0x04, 0x06, 0x08].contains(signature[signature.startIndex + 3]) else {
+            throw ImportError.invalidArchive
+        }
+
         let destinationDirectory = try Self.importDirectory()
         var destinationURL = destinationDirectory.appendingPathComponent(sourceURL.lastPathComponent)
         if FileManager.default.fileExists(atPath: destinationURL.path) {
@@ -252,8 +265,14 @@ struct IPAImportView: View {
 
     private enum ImportError: LocalizedError {
         case notIPA
+        case invalidArchive
         var errorDescription: String? {
-            "Only files with the .ipa extension can be imported."
+            switch self {
+            case .notIPA:
+                return "Only files with the .ipa extension can be imported."
+            case .invalidArchive:
+                return "This file does not have a valid ZIP/IPA signature. It was not imported."
+            }
         }
     }
 }
