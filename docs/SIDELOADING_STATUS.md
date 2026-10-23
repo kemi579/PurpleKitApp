@@ -11,6 +11,8 @@ This document distinguishes implemented behavior from planned behavior. A succes
 - Local caching of the last successfully loaded catalog.
 - Removal of legacy locally-generated certificate placeholder state. Saving an Apple ID email is not authentication and does not create a certificate.
 - Rounded floating glass bottom navigation for Apps and Settings, with an animated selected state and SwiftUI's native tab bar hidden.
+- IPA Library screen with multi-select `.ipa` import through the Files picker, app-sandbox storage, duplicate-name protection, file-size display, reload from disk, and delete confirmation.
+- Honest scope messaging: imported packages are stored only; no IPA extraction, signature verification, signing, pairing, or installation is claimed.
 - Pull-request CI that generates the Xcode project, archives without signing, packages an IPA, and checks for `Payload/PurpleKit.app/Info.plist`.
 
 ## Not implemented yet
@@ -18,7 +20,7 @@ This document distinguishes implemented behavior from planned behavior. A succes
 - Apple ID authentication and two-factor authentication.
 - Real Anisette request generation or connection to an Anisette server.
 - Developer certificate creation/renewal or provisioning profile management.
-- IPA import, bundle inspection, code signing, and installation to a paired iOS device.
+- IPA bundle extraction and metadata inspection, code-signature verification, code signing, and installation to a paired iOS device. The current IPA Library only imports and stores the file.
 - Device pairing, Minimuxer integration, installed-app inventory, or automatic refresh.
 - End-to-end device testing.
 
@@ -33,7 +35,7 @@ This document distinguishes implemented behavior from planned behavior. A succes
 7. Implement logout, session expiration, cancellation, retry, and rate-limit handling.
 8. Add tests for parsing, state transitions, 2FA retries, and secret redaction.
 9. Add real certificate and provisioning-profile management only after authentication is verified.
-10. Add IPA import/inspection/signing and device pairing as separate, testable features.
+10. Add IPA archive validation and metadata extraction, then signing and device pairing as separate, testable features.
 11. Validate the whole flow on a physical device before describing the app as installable.
 
 ## Security and release notes
