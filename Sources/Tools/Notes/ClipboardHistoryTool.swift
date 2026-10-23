@@ -72,15 +72,19 @@ struct ClipboardHistoryView: View {
         }
         .onDisappear {
             timer?.invalidate()
+            timer = nil
         }
     }
 
     private func startMonitoring() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
-            checkClipboard()
+            Task { @MainActor in
+                checkClipboard()
+            }
         }
     }
 
+    @MainActor
     private func checkClipboard() {
         guard let str = UIPasteboard.general.string, !str.isEmpty else { return }
         if items.first?.text == str { return }
