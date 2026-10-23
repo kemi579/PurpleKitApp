@@ -74,7 +74,13 @@ final class AnisetteServerCatalog: ObservableObject {
             request.timeoutInterval = 20
             request.cachePolicy = .reloadIgnoringLocalCacheData
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            guard let http = response as? HTTPURLResponse else {
+                throw CatalogError.invalidResponse
+            }
+            guard http.url?.scheme?.lowercased() == "https" else {
+                throw CatalogError.insecureRedirect
+            }
+            guard (200...299).contains(http.statusCode) else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
                 throw CatalogError.httpStatus(code)
             }
@@ -127,12 +133,16 @@ final class AnisetteServerCatalog: ObservableObject {
         case httpStatus(Int)
         case invalidJSON
         case emptyCatalog
+        case invalidResponse
+        case insecureRedirect
 
         var errorDescription: String? {
             switch self {
             case .httpStatus(let code): return "Catalog request failed (HTTP \(code))."
             case .invalidJSON: return "Expected a JSON array of {name,address/url} entries or an object with a servers array."
             case .emptyCatalog: return "The catalog contained no valid HTTPS server entries."
+            case .invalidResponse: return "The catalog server returned an invalid HTTP response."
+            case .insecureRedirect: return "The catalog redirected to a non-HTTPS URL. Use an HTTPS endpoint that stays on HTTPS."
             }
         }
     }
