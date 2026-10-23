@@ -3,6 +3,12 @@ import SwiftUI
 struct MainTabView: View {
     @State private var tab = 0
     @StateObject private var certs = CertificateStore.shared
+    @Namespace private var tabNS
+
+    private let tabs: [(title: String, symbol: String)] = [
+        ("Apps", "app.badge.fill"),
+        ("Settings", "gearshape.fill")
+    ]
 
     var body: some View {
         ZStack {
@@ -24,63 +30,68 @@ struct MainTabView: View {
         }
     }
 
-    // MARK: - Liquid Glass Tab Bar
+    // MARK: - Slim horizontal Liquid Glass bar
 
     private var liquidTabBar: some View {
-        HStack(spacing: 6) {
-            tabButton(title: "Apps", symbol: "app.badge.fill", index: 0)
-            tabButton(title: "Settings", symbol: "gearshape.fill", index: 1)
+        HStack(spacing: 0) {
+            ForEach(Array(tabs.enumerated()), id: \.offset) { index, item in
+                tabButton(title: item.title, symbol: item.symbol, index: index)
+            }
         }
-        .padding(6)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
         .background {
-            Capsule()
+            // Outer glass capsule
+            Capsule(style: .continuous)
                 .fill(.ultraThinMaterial)
-                .opacity(0.92)
+                .opacity(0.88)
                 .overlay {
-                    Capsule()
+                    Capsule(style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.10),
-                                    Color.white.opacity(0.03)
+                                    Color.white.opacity(0.14),
+                                    Color.white.opacity(0.03),
+                                    Color.white.opacity(0.08)
                                 ],
-                                startPoint: .top,
-                                endPoint: .bottom
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
                             )
                         )
                 }
                 .overlay {
-                    Capsule()
+                    Capsule(style: .continuous)
                         .strokeBorder(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.32),
-                                    Color.white.opacity(0.08),
-                                    Color.white.opacity(0.18)
+                                    Color.white.opacity(0.38),
+                                    Color.white.opacity(0.06),
+                                    Color.white.opacity(0.2)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 1.2
+                            lineWidth: 1
                         )
                 }
-                .shadow(color: Theme.primary.opacity(0.18), radius: 20, x: 0, y: 8)
-                .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 12)
+                .shadow(color: Theme.primary.opacity(0.16), radius: 14, x: 0, y: 6)
+                .shadow(color: .black.opacity(0.3), radius: 16, x: 0, y: 8)
         }
-        .padding(.horizontal, 36)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 48)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
         .background {
             LinearGradient(
                 colors: [
                     Theme.background.opacity(0),
-                    Theme.background.opacity(0.55),
-                    Theme.background.opacity(0.9)
+                    Theme.background.opacity(0.5),
+                    Theme.background.opacity(0.92)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: 90)
+            .frame(height: 72)
+            .allowsHitTesting(false)
             .ignoresSafeArea(edges: .bottom)
         }
     }
@@ -90,39 +101,38 @@ struct MainTabView: View {
 
         return Button {
             Haptic.light()
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.78)) {
                 tab = index
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: symbol)
-                    .font(.system(size: 16, weight: .semibold))
-                    .scaleEffect(isSelected ? 1.05 : 1.0)
-
-                Text(title)
                     .font(.system(size: 13, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
             }
             .foregroundStyle(isSelected ? Color.white : Theme.textSecondary)
             .frame(maxWidth: .infinity)
-            .frame(height: 46)
+            .frame(height: 34)
             .background {
                 if isSelected {
-                    Capsule()
+                    Capsule(style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Theme.primary.opacity(0.85),
-                                    Theme.primaryLight.opacity(0.7)
+                                    Theme.primary.opacity(0.9),
+                                    Theme.primaryLight.opacity(0.75)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
                         )
                         .overlay {
-                            Capsule()
-                                .strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.28), lineWidth: 0.8)
                         }
-                        .shadow(color: Theme.primary.opacity(0.45), radius: 10, x: 0, y: 4)
+                        .shadow(color: Theme.primary.opacity(0.5), radius: 8, x: 0, y: 3)
+                        .matchedGeometryEffect(id: "liquidPill", in: tabNS)
                 }
             }
             .contentShape(Capsule())

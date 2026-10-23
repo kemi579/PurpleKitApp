@@ -2,13 +2,23 @@ import Foundation
 import SwiftUI
 import SideSign
 
+/// Multi-step 2FA UI state driven by SideSign verification callbacks.
+enum TwoFactorPhase: Equatable {
+    case none
+    /// Pick trusted device / SMS / voice and request the code.
+    case chooseMethod
+    /// Waiting after user tapped "Send / Approve".
+    case waitingForDelivery
+    /// Enter the 6-digit code (sheet re-presented after request).
+    case enterCode
+}
+
 /// Real Apple Developer Portal authentication backed by SideSign.
 /// Passwords are held only for the duration of an explicit sign-in attempt.
 @MainActor
 final class SideSignAppleAccountProvider: ObservableObject {
     @Published var appleID = ""
     @Published var password = ""
-    /// Selected Anisette server address (HTTPS URL from catalog).
     @Published var selectedServerAddress = ""
     @Published private(set) var isBusy = false
     @Published private(set) var status = "Not signed in"
@@ -18,10 +28,15 @@ final class SideSignAppleAccountProvider: ObservableObject {
     @Published private(set) var hasCertificate = false
     @Published private(set) var certificateName = ""
     @Published private(set) var certificateExpires: Date?
-    @Published var verificationPrompt: String?
+
+    // 2FA
+    @Published var twoFactorPhase: TwoFactorPhase = .none
+    @Published var twoFactorTitle = ""
+    @Published var twoFactorMessage = ""
     @Published var verificationCode = ""
     @Published var selectedDelivery: TwoFactorDeliveryMode = .trustedDevice
     @Published private(set) var availablePhones: [TrustedPhoneNumber] = []
+    @Published var selectedPhoneID = ""
 
     private var pendingVerification: CheckedContinuation<TwoFactorResponse, Never>?
     private var authSession: AuthSession?
@@ -34,7 +49,6 @@ final class SideSignAppleAccountProvider: ObservableObject {
         appleID = (try? KeychainVault.load(account: "apple-id-email")).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         selectedServerAddress = UserDefaults.standard.string(forKey: Self.selectedServerKey) ?? ""
 
-        // Restore certificate metadata if present in Keychain
         if (try? KeychainVault.load(account: "sidesign-development-certificate-p12")) != nil {
             hasCertificate = true
             certificateName = UserDefaults.standard.string(forKey: "PurpleKit.certName") ?? "Development certificate"
@@ -64,6 +78,10 @@ final class SideSignAppleAccountProvider: ObservableObject {
         !appleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !password.isEmpty &&
         validAnisetteURL != nil
+    }
+
+    var showTwoFactorSheet: Bool {
+        twoFactorPhase != .none
     }
 
     private var validAnisetteURL: URL? {
@@ -124,63 +142,128 @@ final class SideSignAppleAccountProvider: ObservableObject {
         }
     }
 
+    // MARK: - 2FA multi-step
+
     private func handleVerification(_ request: TwoFactorRequest) async -> TwoFactorResponse {
         await withCheckedContinuation { continuation in
             Task { @MainActor in
                 self.pendingVerification = continuation
                 self.verificationCode = ""
+
                 switch request {
                 case .selectDeliveryMethod(let preferred, let phones):
                     self.availablePhones = phones
                     self.selectedDelivery = preferred
-                    self.verificationPrompt = "Choose how Apple should send your verification code."
+                    self.selectedPhoneID = phones.first?.id ?? ""
+                    self.twoFactorTitle = "Verification method"
+                    self.twoFactorMessage = "Choose how Apple should send the code, then tap Continue."
+                    self.twoFactorPhase = .chooseMethod
+
                 case .trustedDevice(let error):
                     self.selectedDelivery = .trustedDevice
                     self.availablePhones = []
-                    self.verificationPrompt = error ?? "Approve the sign-in on a trusted Apple device, then continue."
-                case .sms(let phones, _, let error):
+                    // If Apple already asked for code entry (error present after push),
+                    // go straight to enterCode; otherwise first request approval.
+                    if let error, !error.isEmpty {
+                        self.twoFactorTitle = "Enter code"
+                        self.twoFactorMessage = error
+                        self.twoFactorPhase = .enterCode
+                    } else {
+                        self.twoFactorTitle = "Trusted device"
+                        self.twoFactorMessage = "Tap Continue so Apple can send a prompt to your iPhone/Mac. Approve it there, then you'll enter the code."
+                        self.twoFactorPhase = .chooseMethod
+                    }
+
+                case .sms(let phones, let activeID, let error):
                     self.availablePhones = phones
                     self.selectedDelivery = .sms
-                    self.verificationPrompt = error ?? "Enter the code sent by SMS."
-                case .voice(let phones, _, let error):
+                    self.selectedPhoneID = activeID.isEmpty ? (phones.first?.id ?? "") : activeID
+                    if let error, error.lowercased().contains("code") || error.lowercased().contains("incorrect") {
+                        self.twoFactorTitle = "SMS code"
+                        self.twoFactorMessage = error
+                        self.twoFactorPhase = .enterCode
+                    } else if error == nil && activeID.isEmpty == false {
+                        // Code was requested — show enter field
+                        self.twoFactorTitle = "Enter SMS code"
+                        self.twoFactorMessage = "Enter the 6-digit code Apple sent by text message."
+                        self.twoFactorPhase = .enterCode
+                    } else {
+                        self.twoFactorTitle = "Send SMS code"
+                        self.twoFactorMessage = error ?? "Tap Continue to request an SMS code."
+                        self.twoFactorPhase = .chooseMethod
+                    }
+
+                case .voice(let phones, let activeID, let error):
                     self.availablePhones = phones
                     self.selectedDelivery = .voice
-                    self.verificationPrompt = error ?? "Enter the code from the Apple verification call."
+                    self.selectedPhoneID = activeID.isEmpty ? (phones.first?.id ?? "") : activeID
+                    if error != nil {
+                        self.twoFactorTitle = "Voice code"
+                        self.twoFactorMessage = error ?? "Enter the code from the call."
+                        self.twoFactorPhase = .enterCode
+                    } else {
+                        self.twoFactorTitle = "Request voice call"
+                        self.twoFactorMessage = "Tap Continue so Apple can call you with a code."
+                        self.twoFactorPhase = .chooseMethod
+                    }
                 }
             }
         }
     }
 
-    func submitVerification() {
+    /// Step 1: request delivery (trusted device / SMS / voice). Closes sheet; SideSign will call back for code.
+    func requestDelivery() {
         guard let continuation = pendingVerification else { return }
         pendingVerification = nil
-        verificationPrompt = nil
+        twoFactorPhase = .waitingForDelivery
+        status = "Waiting for Apple verification…"
+
         switch selectedDelivery {
         case .trustedDevice:
-            continuation.resume(returning: verificationCode.isEmpty ? .requestTrustedDevice : .verificationCode(verificationCode))
+            continuation.resume(returning: .requestTrustedDevice)
         case .sms:
-            if !verificationCode.isEmpty {
-                continuation.resume(returning: .verificationCode(verificationCode))
-            } else if let phone = availablePhones.first {
-                continuation.resume(returning: .requestSMS(phoneID: phone.id))
+            let phone = selectedPhoneID.isEmpty ? availablePhones.first?.id : selectedPhoneID
+            if let phone {
+                continuation.resume(returning: .requestSMS(phoneID: phone))
             } else {
                 continuation.resume(returning: .cancel)
+                twoFactorPhase = .none
             }
         case .voice:
-            if !verificationCode.isEmpty {
-                continuation.resume(returning: .verificationCode(verificationCode))
-            } else if let phone = availablePhones.first {
-                continuation.resume(returning: .requestVoice(phoneID: phone.id))
+            let phone = selectedPhoneID.isEmpty ? availablePhones.first?.id : selectedPhoneID
+            if let phone {
+                continuation.resume(returning: .requestVoice(phoneID: phone))
             } else {
                 continuation.resume(returning: .cancel)
+                twoFactorPhase = .none
             }
+        }
+    }
+
+    /// Step 2: submit the 6-digit code.
+    func submitCode() {
+        let code = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, let continuation = pendingVerification else { return }
+        pendingVerification = nil
+        twoFactorPhase = .none
+        continuation.resume(returning: .verificationCode(code))
+    }
+
+    /// If already in enterCode and user somehow needs re-request.
+    func submitVerification() {
+        if twoFactorPhase == .enterCode {
+            submitCode()
+        } else {
+            requestDelivery()
         }
     }
 
     func cancelVerification() {
         let continuation = pendingVerification
         pendingVerification = nil
-        verificationPrompt = nil
+        twoFactorPhase = .none
+        twoFactorTitle = ""
+        twoFactorMessage = ""
         continuation?.resume(returning: .cancel)
     }
 
@@ -249,10 +332,26 @@ final class SideSignAppleAccountProvider: ObservableObject {
     }
 
     private static func safeError(_ error: Error) -> String {
+        let raw: String
         if let error = error as? LocalizedError, let message = error.errorDescription {
-            return String(message.prefix(400))
+            raw = message
+        } else {
+            raw = String(describing: error)
         }
-        return "Authentication failed. Check network, Anisette server, and Apple account."
+        let lower = raw.lowercased()
+        if lower.contains("434") || lower.contains("http 434") {
+            return "Anisette server returned 434 (unavailable / rate-limited). Pick another server from the list and try again."
+        }
+        if lower.contains("timeout") || lower.contains("timed out") {
+            return "Network timeout. Check connection or try another Anisette server."
+        }
+        if lower.contains("incorrect") && lower.contains("credential") {
+            return "Wrong Apple ID or password."
+        }
+        if lower.contains("verification") && lower.contains("incorrect") {
+            return "Incorrect verification code. Try again."
+        }
+        return String(raw.prefix(400))
     }
 }
 
@@ -278,7 +377,6 @@ struct AppleDeveloperPortalSignInView: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 18) {
-                        // Hero
                         VStack(spacing: 10) {
                             Image(systemName: "apple.logo")
                                 .font(.system(size: 40, weight: .medium))
@@ -293,236 +391,15 @@ struct AppleDeveloperPortalSignInView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.top, 12)
 
-                        // Credentials card
-                        VStack(alignment: .leading, spacing: 14) {
-                            fieldLabel("Apple ID")
-                            TextField("email@icloud.com", text: $model.appleID)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .keyboardType(.emailAddress)
-                                .padding(14)
-                                .background(fieldBg)
-                                .foregroundColor(Theme.textPrimary)
+                        credentialsCard
+                        teamsCard
 
-                            fieldLabel("Password")
-                            SecureField("Apple ID password", text: $model.password)
-                                .padding(14)
-                                .background(fieldBg)
-                                .foregroundColor(Theme.textPrimary)
-
-                            // Anisette server — expandable picker
-                            fieldLabel("Anisette server")
-                            Button {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                    showServerList.toggle()
-                                }
-                                if catalog.servers.isEmpty {
-                                    Task { await catalog.refresh() }
-                                }
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(selectedServerName)
-                                            .font(.system(size: 15, weight: .medium))
-                                            .foregroundColor(Theme.textPrimary)
-                                            .lineLimit(1)
-                                        if !model.selectedServerAddress.isEmpty {
-                                            Text(model.selectedServerAddress)
-                                                .font(.system(size: 11, design: .monospaced))
-                                                .foregroundColor(Theme.textSecondary)
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                    Spacer()
-                                    Image(systemName: showServerList ? "chevron.up" : "chevron.down")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(Theme.primaryLight)
-                                }
-                                .padding(14)
-                                .background(fieldBg)
-                            }
-                            .buttonStyle(.plain)
-
-                            if showServerList {
-                                VStack(spacing: 0) {
-                                    if catalog.isLoading {
-                                        HStack {
-                                            ProgressView().controlSize(.small)
-                                            Text("Loading servers…")
-                                                .font(.caption)
-                                                .foregroundColor(Theme.textSecondary)
-                                        }
-                                        .padding(14)
-                                    } else if catalog.servers.isEmpty {
-                                        Text(catalog.lastError ?? "No servers. Pull to refresh.")
-                                            .font(.caption)
-                                            .foregroundColor(Theme.warning)
-                                            .padding(14)
-                                    } else {
-                                        ForEach(catalog.servers) { server in
-                                            Button {
-                                                model.selectedServerAddress = server.address
-                                                withAnimation { showServerList = false }
-                                            } label: {
-                                                HStack {
-                                                    VStack(alignment: .leading, spacing: 2) {
-                                                        Text(server.name)
-                                                            .font(.system(size: 14, weight: .semibold))
-                                                            .foregroundColor(Theme.textPrimary)
-                                                        Text(server.address)
-                                                            .font(.system(size: 11, design: .monospaced))
-                                                            .foregroundColor(Theme.textSecondary)
-                                                            .lineLimit(1)
-                                                    }
-                                                    Spacer()
-                                                    if model.selectedServerAddress == server.address {
-                                                        Image(systemName: "checkmark.circle.fill")
-                                                            .foregroundColor(Theme.primaryLight)
-                                                    }
-                                                }
-                                                .padding(.horizontal, 14)
-                                                .padding(.vertical, 12)
-                                                .contentShape(Rectangle())
-                                            }
-                                            .buttonStyle(.plain)
-
-                                            if server.id != catalog.servers.last?.id {
-                                                Divider().overlay(Color.white.opacity(0.08))
-                                            }
-                                        }
-                                    }
-
-                                    Divider().overlay(Color.white.opacity(0.1))
-
-                                    Button {
-                                        Task { await catalog.refresh() }
-                                    } label: {
-                                        HStack {
-                                            Image(systemName: "arrow.clockwise")
-                                            Text("Refresh list")
-                                        }
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundColor(Theme.primaryLight)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(12)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(catalog.isLoading)
-                                }
-                                .background {
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .fill(Color.white.opacity(0.04))
-                                        .overlay {
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .strokeBorder(Theme.glassStroke, lineWidth: 1)
-                                        }
-                                }
-                            }
-
-                            // Sign in button
-                            Button {
-                                Task { await model.signIn() }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    if model.isBusy {
-                                        ProgressView().tint(.white)
-                                    } else {
-                                        Image(systemName: "apple.logo")
-                                    }
-                                    Text(model.isBusy ? "Connecting…" : "Sign in")
-                                        .fontWeight(.semibold)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 15)
-                                .foregroundColor(.white)
-                                .background(Theme.primaryGradient)
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .shadow(color: Theme.primary.opacity(0.4), radius: 10, x: 0, y: 5)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!model.canSignIn)
-                            .opacity(model.canSignIn ? 1 : 0.55)
-                        }
-                        .padding(16)
-                        .glassCard(cornerRadius: 20)
-
-                        // Teams + cert (after sign-in)
-                        if !model.teams.isEmpty {
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text("Developer team")
-                                    .font(.headline)
-                                    .foregroundColor(Theme.textPrimary)
-
-                                Picker("Team", selection: $model.selectedTeamID) {
-                                    ForEach(model.teams, id: \.identifier) { team in
-                                        Text("\(team.name) (\(team.type.displayName))")
-                                            .tag(team.identifier)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .tint(Theme.primaryLight)
-                                .padding(12)
-                                .background(fieldBg)
-
-                                Button {
-                                    Task { await model.createDevelopmentCertificate() }
-                                } label: {
-                                    HStack {
-                                        if model.isBusy {
-                                            ProgressView().tint(.white)
-                                        } else {
-                                            Image(systemName: "checkmark.seal.fill")
-                                        }
-                                        Text(model.hasCertificate
-                                              ? "Request another certificate"
-                                              : "Request development certificate")
-                                            .fontWeight(.semibold)
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 14)
-                                    .foregroundColor(.white)
-                                    .background(Theme.neonGradient)
-                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(model.isBusy)
-
-                                if model.hasCertificate {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Label("Certificate in Keychain", systemImage: "lock.shield.fill")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundColor(Theme.success)
-                                        Text(model.certificateName)
-                                            .font(.caption.monospaced())
-                                            .foregroundColor(Theme.textPrimary)
-                                        if let expiry = model.certificateExpires {
-                                            Text("Expires \(expiry.formatted(date: .abbreviated, time: .omitted))")
-                                                .font(.caption)
-                                                .foregroundColor(Theme.textSecondary)
-                                        }
-                                    }
-                                    .padding(12)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background {
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .fill(Theme.success.opacity(0.1))
-                                            .overlay {
-                                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                    .strokeBorder(Theme.success.opacity(0.25), lineWidth: 1)
-                                            }
-                                    }
-                                }
-                            }
-                            .padding(16)
-                            .glassCard(cornerRadius: 18)
-                        }
-
-                        // Status
                         Text(model.status)
                             .font(.subheadline)
                             .foregroundColor(Theme.textSecondary)
                             .textSelection(.enabled)
                             .padding(.horizontal, 4)
+                            .animation(.easeOut(duration: 0.25), value: model.status)
 
                         if model.account != nil {
                             Button(role: .destructive) {
@@ -537,7 +414,7 @@ struct AppleDeveloperPortalSignInView: View {
                             .foregroundColor(Theme.error)
                         }
 
-                        Text("Password is never saved. Anisette only supplies device metadata — login goes to Apple. Free Apple ID certificates last ~7 days.")
+                        Text("Password is never saved. If a server shows 434, pick another from the list. Free Apple ID certs last ~7 days.")
                             .font(.caption2)
                             .foregroundColor(Theme.textTertiary)
                             .padding(.bottom, 20)
@@ -557,37 +434,261 @@ struct AppleDeveloperPortalSignInView: View {
                 if catalog.servers.isEmpty {
                     await catalog.refresh()
                 }
-                // Auto-select first server if none chosen
                 if model.selectedServerAddress.isEmpty,
                    let first = catalog.servers.first {
                     model.selectedServerAddress = first.address
                 }
             }
-            .alert(
-                model.verificationPrompt ?? "Apple verification",
-                isPresented: Binding(
-                    get: { model.verificationPrompt != nil },
-                    set: { if !$0 { model.cancelVerification() } }
-                )
-            ) {
-                TextField("Verification code", text: $model.verificationCode)
-                    .keyboardType(.numberPad)
-                Button("Continue") { model.submitVerification() }
-                Button("Cancel", role: .cancel) { model.cancelVerification() }
-            } message: {
-                Text("For SMS/voice enter the code. For trusted device, approve on your device then continue.")
+            .sheet(isPresented: Binding(
+                get: { model.showTwoFactorSheet },
+                set: { if !$0 { model.cancelVerification() } }
+            )) {
+                TwoFactorSheet(model: model)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    // MARK: Credentials
+
+    private var credentialsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            fieldLabel("Apple ID")
+            TextField("email@icloud.com", text: $model.appleID)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.emailAddress)
+                .padding(14)
+                .background(fieldBg)
+                .foregroundColor(Theme.textPrimary)
+
+            fieldLabel("Password")
+            SecureField("Apple ID password", text: $model.password)
+                .padding(14)
+                .background(fieldBg)
+                .foregroundColor(Theme.textPrimary)
+
+            fieldLabel("Anisette server")
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    showServerList.toggle()
+                }
+                if catalog.servers.isEmpty {
+                    Task { await catalog.refresh() }
+                }
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(selectedServerName)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
+                        if !model.selectedServerAddress.isEmpty {
+                            Text(model.selectedServerAddress)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(Theme.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    Image(systemName: showServerList ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.primaryLight)
+                }
+                .padding(14)
+                .background(fieldBg)
+            }
+            .buttonStyle(.plain)
+
+            if showServerList {
+                serverListExpanded
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            Button {
+                Task { await model.signIn() }
+            } label: {
+                HStack(spacing: 8) {
+                    if model.isBusy {
+                        ProgressView().tint(.white)
+                    } else {
+                        Image(systemName: "apple.logo")
+                    }
+                    Text(model.isBusy ? "Connecting…" : "Sign in")
+                        .fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .foregroundColor(.white)
+                .background(Theme.primaryGradient)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: Theme.primary.opacity(0.4), radius: 10, x: 0, y: 5)
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canSignIn)
+            .opacity(model.canSignIn ? 1 : 0.55)
+        }
+        .padding(16)
+        .glassCard(cornerRadius: 20)
+    }
+
+    private var serverListExpanded: some View {
+        VStack(spacing: 0) {
+            if catalog.isLoading {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Loading servers…")
+                        .font(.caption)
+                        .foregroundColor(Theme.textSecondary)
+                }
+                .padding(14)
+            } else if catalog.servers.isEmpty {
+                Text(catalog.lastError ?? "No servers.")
+                    .font(.caption)
+                    .foregroundColor(Theme.warning)
+                    .padding(14)
+            } else {
+                ForEach(catalog.servers) { server in
+                    Button {
+                        model.selectedServerAddress = server.address
+                        withAnimation { showServerList = false }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(server.name)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(Theme.textPrimary)
+                                Text(server.address)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(Theme.textSecondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            if model.selectedServerAddress == server.address {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(Theme.primaryLight)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if server.id != catalog.servers.last?.id {
+                        Divider().overlay(Color.white.opacity(0.08))
+                    }
+                }
+            }
+
+            Divider().overlay(Color.white.opacity(0.1))
+
+            Button {
+                Task { await catalog.refresh() }
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.clockwise")
+                    Text("Refresh list")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(Theme.primaryLight)
+                .frame(maxWidth: .infinity)
+                .padding(12)
+            }
+            .buttonStyle(.plain)
+            .disabled(catalog.isLoading)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Theme.glassStroke, lineWidth: 1)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var teamsCard: some View {
+        if !model.teams.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Developer team")
+                    .font(.headline)
+                    .foregroundColor(Theme.textPrimary)
+
+                Picker("Team", selection: $model.selectedTeamID) {
+                    ForEach(model.teams, id: \.identifier) { team in
+                        Text("\(team.name) (\(team.type.displayName))")
+                            .tag(team.identifier)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(Theme.primaryLight)
+                .padding(12)
+                .background(fieldBg)
+
+                Button {
+                    Task { await model.createDevelopmentCertificate() }
+                } label: {
+                    HStack {
+                        if model.isBusy {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "checkmark.seal.fill")
+                        }
+                        Text(model.hasCertificate
+                              ? "Request another certificate"
+                              : "Request development certificate")
+                            .fontWeight(.semibold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .foregroundColor(.white)
+                    .background(Theme.neonGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.isBusy)
+
+                if model.hasCertificate {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Certificate in Keychain", systemImage: "lock.shield.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(Theme.success)
+                        Text(model.certificateName)
+                            .font(.caption.monospaced())
+                            .foregroundColor(Theme.textPrimary)
+                        if let expiry = model.certificateExpires {
+                            Text("Expires \(expiry.formatted(date: .abbreviated, time: .omitted))")
+                                .font(.caption)
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Theme.success.opacity(0.1))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(Theme.success.opacity(0.25), lineWidth: 1)
+                            }
+                    }
+                }
+            }
+            .padding(16)
+            .glassCard(cornerRadius: 18)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
     }
 
     private var selectedServerName: String {
         if let match = catalog.servers.first(where: { $0.address == model.selectedServerAddress }) {
             return match.name
         }
-        if model.selectedServerAddress.isEmpty {
-            return "Select a server"
-        }
+        if model.selectedServerAddress.isEmpty { return "Select a server" }
         return "Custom server"
     }
 
@@ -609,5 +710,184 @@ struct AppleDeveloperPortalSignInView: View {
         Text(text)
             .font(.system(size: 13, weight: .medium))
             .foregroundColor(Theme.textSecondary)
+    }
+}
+
+// MARK: - 2FA sheet (request → approve → enter code)
+
+struct TwoFactorSheet: View {
+    @ObservedObject var model: SideSignAppleAccountProvider
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+
+                VStack(alignment: .leading, spacing: 20) {
+                    Text(model.twoFactorTitle)
+                        .font(.title3.bold())
+                        .foregroundColor(Theme.textPrimary)
+
+                    Text(model.twoFactorMessage)
+                        .font(.subheadline)
+                        .foregroundColor(Theme.textSecondary)
+
+                    if model.twoFactorPhase == .chooseMethod {
+                        methodPicker
+
+                        if model.selectedDelivery != .trustedDevice, !model.availablePhones.isEmpty {
+                            phonePicker
+                        }
+
+                        Button {
+                            Haptic.medium()
+                            model.requestDelivery()
+                        } label: {
+                            Text(primaryActionTitle)
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .foregroundColor(.white)
+                                .background(Theme.primaryGradient)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if model.twoFactorPhase == .waitingForDelivery {
+                        HStack(spacing: 12) {
+                            ProgressView()
+                            Text("Waiting for Apple… Approve on your device if prompted.")
+                                .font(.subheadline)
+                                .foregroundColor(Theme.textSecondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+
+                    if model.twoFactorPhase == .enterCode {
+                        TextField("6-digit code", text: $model.verificationCode)
+                            .keyboardType(.numberPad)
+                            .font(.system(size: 22, weight: .semibold, design: .rounded))
+                            .multilineTextAlignment(.center)
+                            .padding(16)
+                            .background {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .strokeBorder(Theme.glassStroke, lineWidth: 1)
+                                    }
+                            }
+                            .foregroundColor(Theme.textPrimary)
+
+                        Button {
+                            Haptic.medium()
+                            model.submitCode()
+                        } label: {
+                            Text("Confirm code")
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .foregroundColor(.white)
+                                .background(Theme.primaryGradient)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.verificationCode.trimmingCharacters(in: .whitespacesAndNewlines).count < 4)
+                        .opacity(model.verificationCode.trimmingCharacters(in: .whitespacesAndNewlines).count < 4 ? 0.5 : 1)
+                    }
+
+                    Spacer()
+                }
+                .padding(24)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { model.cancelVerification() }
+                        .foregroundColor(Theme.textSecondary)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var primaryActionTitle: String {
+        switch model.selectedDelivery {
+        case .trustedDevice: return "Send prompt to my devices"
+        case .sms: return "Send SMS code"
+        case .voice: return "Call me with code"
+        }
+    }
+
+    private var methodPicker: some View {
+        VStack(spacing: 8) {
+            methodRow(.trustedDevice, title: "Trusted device", icon: "iphone")
+            if !model.availablePhones.isEmpty {
+                methodRow(.sms, title: "Text message (SMS)", icon: "message.fill")
+                methodRow(.voice, title: "Phone call", icon: "phone.fill")
+            }
+        }
+    }
+
+    private func methodRow(_ mode: TwoFactorDeliveryMode, title: String, icon: String) -> some View {
+        let selected = model.selectedDelivery == mode
+        return Button {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                model.selectedDelivery = mode
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .foregroundColor(selected ? Theme.primaryLight : Theme.textSecondary)
+                    .frame(width: 28)
+                Text(title)
+                    .foregroundColor(Theme.textPrimary)
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(Theme.primaryLight)
+                }
+            }
+            .padding(14)
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(selected ? Theme.primary.opacity(0.15) : Color.white.opacity(0.05))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(selected ? Theme.primaryLight.opacity(0.35) : Theme.glassStroke, lineWidth: 1)
+                    }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var phonePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Phone number")
+                .font(.caption.weight(.medium))
+                .foregroundColor(Theme.textSecondary)
+            ForEach(model.availablePhones) { phone in
+                Button {
+                    model.selectedPhoneID = phone.id
+                } label: {
+                    HStack {
+                        Text(phone.number)
+                            .foregroundColor(Theme.textPrimary)
+                        Spacer()
+                        if model.selectedPhoneID == phone.id {
+                            Image(systemName: "checkmark")
+                                .foregroundColor(Theme.primaryLight)
+                        }
+                    }
+                    .padding(12)
+                    .background {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.white.opacity(0.05))
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 }
