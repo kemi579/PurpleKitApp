@@ -32,7 +32,7 @@ packages:
     branch: main
   Minimuxer:
     url: https://github.com/SideStore/minimuxer.git
-    branch: main
+    branch: develop
 targets:
   PurpleKit:
     type: application
