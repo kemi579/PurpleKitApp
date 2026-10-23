@@ -16,7 +16,7 @@ This document distinguishes implemented behavior from planned behavior. A succes
 - IPA Library screen with multi-select `.ipa` import through the Files picker, app-sandbox storage, duplicate-name protection, file-size display, reload from disk, and delete confirmation.
 - Honest scope messaging: imported packages are stored only; no IPA extraction, signature verification, signing, pairing, or installation is claimed.
 - XcodeGen project configuration migrated from Swift 5.9 / Xcode 15 to Swift 6 / Xcode 16, with complete strict-concurrency checking requested.
-- Pull-request CI verifies the Swift 6 toolchain, generates the Xcode project, archives without signing, packages an IPA, and checks for `Payload/PurpleKit.app/Info.plist`. CI must pass on the migrated head before this migration is considered validated.
+- CI runs for pull requests and pushes to `feat/**` branches, verifies the Swift 6 toolchain, generates the Xcode project, archives without signing, packages an IPA, and checks for `Payload/PurpleKit.app/Info.plist`. CI must pass on the migrated head before this migration is considered validated.
 
 ## Not implemented yet
 
