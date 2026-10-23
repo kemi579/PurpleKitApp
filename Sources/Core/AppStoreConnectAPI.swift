@@ -12,13 +12,13 @@ struct AppStoreConnectApp: Decodable, Identifiable, Sendable {
 
 private struct AppStoreConnectAppsResponse: Decodable {
     let data: [AppStoreConnectApp]
-    struct ErrorEnvelope: Decodable {
-        struct APIError: Decodable {
-            let title: String?
-            let detail: String?
-        }
-        let errors: [APIError]?
+}
+private struct AppStoreConnectErrorResponse: Decodable {
+    struct APIError: Decodable {
+        let title: String?
+        let detail: String?
     }
+    let errors: [APIError]?
 }
 
 struct AppStoreConnectAPIKey: Codable, Sendable {
@@ -50,11 +50,10 @@ enum AppStoreConnectAPIError: LocalizedError {
     }
 }
 
-/// Official App Store Connect API client. This is API-key authentication, not
-/// Apple ID/password authentication and not a complete sideloading service.
+/// Official API-key authentication; not Apple ID/password sign-in or a complete sideloading service.
 enum AppStoreConnectAPI {
     static func listApps(using key: AppStoreConnectAPIKey) async throws -> [AppStoreConnectApp] {
-        let token = try makeJWT(using: key)
+        let token = try makeTokenForValidation(key)
         var request = URLRequest(url: URL(string: "https://api.appstoreconnect.apple.com/v1/apps?limit=200")!)
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -70,13 +69,13 @@ enum AppStoreConnectAPI {
         case 403:
             throw AppStoreConnectAPIError.forbidden
         default:
-            let envelope = try? JSONDecoder().decode(AppStoreConnectAppsResponse.ErrorEnvelope.self, from: data)
+            let envelope = try? JSONDecoder().decode(AppStoreConnectErrorResponse.self, from: data)
             let detail = envelope?.errors?.compactMap { $0.detail ?? $0.title }.first
             throw AppStoreConnectAPIError.server(detail ?? "App Store Connect API returned HTTP \(http.statusCode).")
         }
     }
 
-    private static func makeJWT(using key: AppStoreConnectAPIKey, now: Date = Date()) throws -> String {
+    static func makeTokenForValidation(_ key: AppStoreConnectAPIKey, now: Date = Date()) throws -> String {
         let issuer = key.issuerID.trimmingCharacters(in: .whitespacesAndNewlines)
         let keyID = key.keyID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !issuer.isEmpty, !keyID.isEmpty else { throw AppStoreConnectAPIError.invalidKey }
