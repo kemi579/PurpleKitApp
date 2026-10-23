@@ -11,6 +11,8 @@ This document distinguishes implemented behavior from planned behavior. A succes
 - Local caching of the last successfully loaded catalog.
 - Removal of legacy locally-generated certificate placeholder state. Saving an Apple ID email is not authentication and does not create a certificate.
 - Rounded floating glass bottom navigation for Apps and Settings, with an animated selected state and SwiftUI's native tab bar hidden.
+- Removed the QR scanner and its camera permission because it is outside the desired sideloading-focused product scope.
+- Fixed the first set of Swift 6 actor-isolation errors in shared observable stores, haptics, and the clipboard-history timer. The next CI run is required to discover any remaining compiler diagnostics.
 - IPA Library screen with multi-select `.ipa` import through the Files picker, app-sandbox storage, duplicate-name protection, file-size display, reload from disk, and delete confirmation.
 - Honest scope messaging: imported packages are stored only; no IPA extraction, signature verification, signing, pairing, or installation is claimed.
 - XcodeGen project configuration migrated from Swift 5.9 / Xcode 15 to Swift 6 / Xcode 16, with complete strict-concurrency checking requested.
