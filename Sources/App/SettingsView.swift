@@ -89,6 +89,32 @@ struct SettingsView: View {
                         )
 
                         NavigationLink {
+                            AppleDeveloperPortalSignInView()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "person.crop.circle.badge.checkmark")
+                                    .font(.title3)
+                                    .foregroundColor(Theme.neon)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Apple ID sign-in & 2FA")
+                                        .font(.headline)
+                                        .foregroundColor(Theme.textPrimary)
+                                    Text("Provider integration is still required")
+                                        .font(.caption)
+                                        .foregroundColor(Theme.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(Theme.textSecondary)
+                            }
+                            .padding(16)
+                            .background(Theme.surfaceElevated)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+
+                        NavigationLink {
                             AnisetteServerSettingsView()
                         } label: {
                             HStack(spacing: 12) {
@@ -120,7 +146,7 @@ struct SettingsView: View {
 
                             infoLine(icon: "info.circle", text: "Free Apple ID = 7-day certificate, max 3 apps, 10 app IDs.")
                             infoLine(icon: "arrow.triangle.2.circlepath", text: "Refresh before expiry or apps stop launching.")
-                            infoLine(icon: "lock.shield", text: "PurpleKit does not request or store your Apple ID password. Real authentication, signing and installation are not implemented yet.")
+                            infoLine(icon: "lock.shield", text: "The sign-in screen is a UI boundary only; no Apple authentication provider, signing or installation is connected yet.")
                         }
 
                         // App info
