@@ -26,10 +26,17 @@ settings:
     INFOPLIST_KEY_CFBundleDisplayName: "PurpleKit"
     INFOPLIST_KEY_LSRequiresIPhoneOS: "YES"
     ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
+packages:
+  SideSign:
+    url: https://github.com/SideStore/SideSign.git
+    branch: main
 targets:
   PurpleKit:
     type: application
     platform: iOS
+    dependencies:
+      - package: SideSign
+        product: SideSign
     sources:
       - path: Sources
         excludes:
