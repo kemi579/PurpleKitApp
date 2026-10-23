@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Tool metadata and its SwiftUI content are consumed by the app interface,
+/// so the protocol explicitly guarantees main-actor access under Swift 6.
+@MainActor
 protocol Tool: Identifiable {
     var id: String { get }
     var name: String { get }
@@ -63,8 +66,9 @@ struct AnyTool: Identifiable {
     let icon: String
     let category: ToolCategory
     let description: String
-    let viewBuilder: () -> AnyView
+    let viewBuilder: @MainActor () -> AnyView
 
+    @MainActor
     init<T: Tool>(_ tool: T) {
         self.id = tool.id
         self.name = tool.name
@@ -74,6 +78,7 @@ struct AnyTool: Identifiable {
         self.viewBuilder = { tool.content }
     }
 
+    @MainActor
     var content: AnyView {
         viewBuilder()
     }
