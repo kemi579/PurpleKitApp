@@ -54,7 +54,12 @@ final class SideSignAppleAccountProvider: ObservableObject {
             if hasCertificate {
                 CertificateStore.shared.applyCertificate(name: certificateName, expires: certificateExpires)
             }
-            Task { await loadTeams() }
+            Task {
+                await loadTeams()
+                if !hasCertificate, !teams.isEmpty {
+                    await createDevelopmentCertificate()
+                }
+            }
         }
     }
 
@@ -105,6 +110,11 @@ final class SideSignAppleAccountProvider: ObservableObject {
             CertificateStore.shared.applyAuthenticatedSession(email: result.account.appleID, team: nil)
             status = "Signed in. Loading teams…"
             await loadTeams()
+            // Auto-issue development cert so user can Sign & Install without extra taps.
+            if !hasCertificate, !teams.isEmpty {
+                status = "Requesting development certificate…"
+                await createDevelopmentCertificate()
+            }
         } catch {
             status = Self.safeError(error)
             authSession = nil
@@ -276,14 +286,21 @@ final class SideSignAppleAccountProvider: ObservableObject {
     }
 
     func createDevelopmentCertificate() async {
-        guard let authSession, let team = teams.first(where: { $0.identifier == selectedTeamID }) else {
-            status = "Sign in and select a team first."
+        guard let authSession, let team = teams.first(where: { $0.identifier == selectedTeamID }) ?? teams.first else {
+            status = "Сначала войди — team не загружен."
             return
         }
+        if selectedTeamID.isEmpty { selectedTeamID = team.identifier }
         isBusy = true
         defer { isBusy = false }
         do {
-            let keyStore = try await portal.addCertificate(machineName: "PurpleKit", type: .iosDevelopment, to: team, session: authSession.session)
+            status = "Запрашиваю development certificate у Apple…"
+            let keyStore = try await portal.addCertificate(
+                machineName: "PurpleKit",
+                type: .iosDevelopment,
+                to: team,
+                session: authSession.session
+            )
             let p12Password = UUID().uuidString
             let p12 = try keyStore.exportP12(password: p12Password)
             try KeychainVault.save(p12, account: "sidesign-development-certificate-p12")
@@ -297,9 +314,15 @@ final class SideSignAppleAccountProvider: ObservableObject {
             }
             CertificateStore.shared.applyCertificate(name: certificateName, expires: certificateExpires)
             CertificateStore.shared.applyAuthenticatedSession(email: authSession.account.appleID, team: team.name)
-            status = "Development certificate issued and saved."
+            status = "Сертификат готов: \(certificateName). Можно Sign & Install."
         } catch {
-            status = "Certificate request failed: \(Self.safeError(error))"
+            let msg = Self.safeError(error)
+            let lower = msg.lowercased()
+            if lower.contains("maximum") || lower.contains("limit") || lower.contains("already") {
+                status = "Лимит сертификатов Apple. Удали старые на developer.apple.com, затем Request certificate снова. (\(msg))"
+            } else {
+                status = "Сертификат не выдан: \(msg)"
+            }
         }
     }
 
