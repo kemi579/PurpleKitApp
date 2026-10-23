@@ -1,11 +1,15 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject var certs: CertificateStore
     @StateObject private var signer = IPASigningService.shared
+    @StateObject private var installer = DeviceInstaller.shared
     @State private var showSignIn = false
     @State private var showLogout = false
     @State private var appear = false
+    @State private var showPairingImporter = false
+    @State private var pairingError: String?
 
     var body: some View {
         NavigationStack {
@@ -30,6 +34,10 @@ struct SettingsView: View {
                             .opacity(appear ? 1 : 0)
                             .offset(y: appear ? 0 : 16)
 
+                        pairingCard
+                            .opacity(appear ? 1 : 0)
+                            .offset(y: appear ? 0 : 17)
+
                         deviceCard
                             .opacity(appear ? 1 : 0)
                             .offset(y: appear ? 0 : 18)
@@ -41,10 +49,10 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 14) {
                             SectionHeader(title: "Sideloading", icon: "shippingbox.fill", color: Theme.neon)
 
-                            infoLine(icon: "info.circle", text: "Free Apple ID = 7-day certificate, max 3 apps, 10 app IDs.")
-                            infoLine(icon: "arrow.triangle.2.circlepath", text: "Refresh before expiry or apps stop launching.")
-                            infoLine(icon: "iphone", text: "UDID is required to register this device on the portal before signing.")
-                            infoLine(icon: "lock.shield", text: "If Anisette returns 434 — switch to another server.")
+                            infoLine(icon: "info.circle", text: "Install = SideSign + minimuxer (same stack as SideStore).")
+                            infoLine(icon: "lock.iphone", text: "One-time pairing file from computer (iloader / SideStore / Jitterbug).")
+                            infoLine(icon: "network", text: "LocalDevVPN or StosVPN must be ON while installing.")
+                            infoLine(icon: "clock", text: "Free Apple ID: 7-day cert, max 3 apps.")
                         }
                         .padding(16)
                         .glassCard(cornerRadius: 18, intensity: 0.8)
@@ -57,7 +65,8 @@ struct SettingsView: View {
                             row("Version", "1.0.0")
                             row("Bundle", "com.kemi579.PurpleKit")
                             row("Min iOS", "16.0")
-                            row("Engine", "SideSign")
+                            row("Sign", "SideSign (GPL-3.0)")
+                            row("Install", "minimuxer (AGPL-3.0)")
                         }
                         .padding(16)
                         .glassCard(cornerRadius: 18, intensity: 0.75)
@@ -77,6 +86,24 @@ struct SettingsView: View {
             .sheet(isPresented: $showSignIn) {
                 AppleDeveloperPortalSignInView()
             }
+            .fileImporter(
+                isPresented: $showPairingImporter,
+                allowedContentTypes: [.data, .item],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    do {
+                        try installer.importPairingFile(from: url)
+                        pairingError = nil
+                    } catch {
+                        pairingError = error.localizedDescription
+                    }
+                case .failure(let error):
+                    pairingError = error.localizedDescription
+                }
+            }
             .confirmationDialog("Disconnect Apple ID?", isPresented: $showLogout, titleVisibility: .visible) {
                 Button("Disconnect", role: .destructive) {
                     certs.logout()
@@ -87,6 +114,61 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             }
         }
+    }
+
+    private var pairingCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Pairing (minimuxer)", icon: "link", color: Theme.neon)
+
+            HStack {
+                Text(installer.hasPairingFile ? "Pairing file imported" : "No pairing file")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(installer.hasPairingFile ? Theme.success : Theme.warning)
+                Spacer()
+                if installer.isMuxerReady {
+                    Text("Muxer ready")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(Theme.success)
+                }
+            }
+
+            Text("Same as SideStore: generate pairing once on a PC (iloader / idevicepair / Jitterbug), then import the .mobiledevicepairing file here.")
+                .font(.caption)
+                .foregroundColor(Theme.textSecondary)
+
+            if let pairingError {
+                Text(pairingError)
+                    .font(.caption)
+                    .foregroundColor(Theme.warning)
+            }
+
+            Button {
+                showPairingImporter = true
+            } label: {
+                Label("Import pairing file", systemImage: "doc.badge.plus")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundColor(.white)
+                    .background(Theme.primaryGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            if installer.hasPairingFile {
+                Button {
+                    try? installer.clearPairingFile()
+                } label: {
+                    Text("Remove pairing file")
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(Theme.error)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(16)
+        .glassCard(cornerRadius: 18)
     }
 
     private var appleIDCard: some View {
@@ -186,7 +268,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: "This device", icon: "iphone", color: Theme.primaryLight)
 
-            Text("UDID (required to sign & install)")
+            Text("UDID (auto-filled from minimuxer when possible)")
                 .font(.caption.weight(.medium))
                 .foregroundColor(Theme.textSecondary)
 
@@ -205,7 +287,7 @@ struct SettingsView: View {
                 }
                 .foregroundColor(Theme.textPrimary)
 
-            Text("Find UDID: Finder → iPhone → click serial until UDID appears, or Xcode → Devices, or SideStore.")
+            Text("Or paste from Finder / Xcode if muxer has not filled it yet.")
                 .font(.caption2)
                 .foregroundColor(Theme.textTertiary)
         }
