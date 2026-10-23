@@ -18,26 +18,12 @@ struct MainTabView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             glassTabBar
         }
-        .onAppear {
-            // Keep the system tab bar hidden; the custom glass bar below owns
-            // navigation so it remains consistently rounded on iOS 16+.
-            UITabBar.appearance().isHidden = true
-        }
     }
 
     private var glassTabBar: some View {
         HStack(spacing: 8) {
-            tabButton(
-                title: "Apps",
-                symbol: "app.badge.fill",
-                index: 0
-            )
-
-            tabButton(
-                title: "Settings",
-                symbol: "gearshape.fill",
-                index: 1
-            )
+            tabButton(title: "Apps", symbol: "app.badge.fill", index: 0)
+            tabButton(title: "Settings", symbol: "gearshape.fill", index: 1)
         }
         .padding(7)
         .background(.ultraThinMaterial, in: Capsule())
@@ -50,8 +36,6 @@ struct MainTabView: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
         .background {
-            // A subtle fade blends the floating bar into the app background
-            // without creating a full-width opaque tab strip.
             LinearGradient(
                 colors: [
                     Theme.background.opacity(0),
