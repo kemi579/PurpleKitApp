@@ -6,79 +6,74 @@ struct AppsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Theme.background.ignoresSafeArea()
+                // Ambient is already drawn by MainTabView; keep local fallback transparent
+                Color.clear
 
                 VStack(spacing: 0) {
-                    HStack {
-                        Text("Apps")
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundStyle(Theme.primaryGradient)
-                        Spacer()
-                        // status pill
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(certs.isCertHealthy ? Theme.success : (certs.isLoggedIn ? Theme.warning : Theme.textSecondary))
-                                .frame(width: 8, height: 8)
-                            Text(certs.isLoggedIn ? certs.certStatusText : "No Apple ID")
-                                .font(.caption2.weight(.medium))
+                    // Header
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("PurpleKit")
+                                .font(.system(size: 13, weight: .medium))
                                 .foregroundColor(Theme.textSecondary)
-                                .lineLimit(1)
+                            Text("Apps")
+                                .font(.system(size: 28, weight: .bold))
+                                .foregroundStyle(Theme.primaryGradient)
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Theme.surfaceElevated)
-                        .clipShape(Capsule())
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
 
-                    ScrollView {
+                        Spacer()
+
+                        StatusPill(
+                            text: certs.isLoggedIn ? certs.certStatusText : "No Apple ID",
+                            color: certs.isCertHealthy
+                                ? Theme.success
+                                : (certs.isLoggedIn ? Theme.warning : Theme.textTertiary)
+                        )
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 14)
+                    .padding(.bottom, 10)
+
+                    ScrollView(showsIndicators: false) {
                         VStack(spacing: 16) {
                             NavigationLink {
                                 IPAImportView()
                             } label: {
-                                HStack(spacing: 14) {
-                                    Image(systemName: "square.and.arrow.down")
-                                        .font(.title2.weight(.semibold))
-                                        .foregroundColor(Theme.primaryLight)
-                                        .frame(width: 46, height: 46)
-                                        .background(Theme.primaryLight.opacity(0.14), in: RoundedRectangle(cornerRadius: 13))
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("IPA Library")
-                                            .font(.headline)
-                                            .foregroundColor(Theme.textPrimary)
-                                        Text("Import and manage IPA files")
-                                            .font(.caption)
-                                            .foregroundColor(Theme.textSecondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundColor(Theme.textSecondary)
-                                }
-                                .padding(16)
-                                .background(Theme.cardGradient)
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(Color.white.opacity(0.07), lineWidth: 1)
-                                }
+                                GlassLinkCard(
+                                    icon: "square.and.arrow.down.fill",
+                                    title: "IPA Library",
+                                    subtitle: "Import and manage IPA files",
+                                    iconColor: Theme.primaryLight
+                                )
                             }
                             .buttonStyle(.plain)
 
+                            // Quick tip card
+                            HStack(spacing: 12) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(Theme.neon)
+
+                                Text("Sign in via Settings → Apple ID to request a development certificate for signing.")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(Theme.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(14)
+                            .glassCard(cornerRadius: 16, intensity: 0.75)
+
                             EmptyStateView(
                                 icon: certs.isLoggedIn ? "app.dashed" : "apple.logo",
-                                title: certs.isLoggedIn ? "No installed apps" : "Apple sign-in unavailable",
+                                title: certs.isLoggedIn ? "No installed apps" : "Ready to sideload",
                                 message: certs.isLoggedIn
                                     ? "Installed-app discovery and device installation are not implemented yet."
-                                    : "You can import IPA files now. Apple ID authentication and signing are not implemented yet; saving an email in Settings does not sign you in."
+                                    : "Import an IPA now. Apple ID authentication and certificate requests live in Settings."
                             )
-                            .padding(.top, 24)
+                            .padding(.top, 8)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 16)
-                        .padding(.bottom, 24)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .padding(.bottom, 110)
                     }
                 }
             }

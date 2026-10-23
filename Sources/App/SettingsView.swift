@@ -8,14 +8,20 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Theme.background.ignoresSafeArea()
+                Color.clear
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        Text("Settings")
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundStyle(Theme.primaryGradient)
-                            .padding(.top, 8)
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 22) {
+                        // Header
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("PurpleKit")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(Theme.textSecondary)
+                            Text("Settings")
+                                .font(.system(size: 28, weight: .bold))
+                                .foregroundStyle(Theme.primaryGradient)
+                        }
+                        .padding(.top, 8)
 
                         // Apple ID card
                         VStack(alignment: .leading, spacing: 16) {
@@ -32,9 +38,15 @@ struct SettingsView: View {
                                         .font(.caption.weight(.semibold))
                                         .foregroundColor(Theme.success)
                                         .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(Theme.success.opacity(0.15))
-                                        .clipShape(Capsule())
+                                        .padding(.vertical, 5)
+                                        .background {
+                                            Capsule()
+                                                .fill(Theme.success.opacity(0.15))
+                                                .overlay {
+                                                    Capsule()
+                                                        .strokeBorder(Theme.success.opacity(0.3), lineWidth: 1)
+                                                }
+                                        }
                                 }
                             }
 
@@ -48,7 +60,7 @@ struct SettingsView: View {
                                     row("Status", certs.certStatusText)
                                 }
 
-                                PurpleButton(title: "Certificate refresh unavailable", icon: "info.circle") {
+                                PurpleButton(title: "Certificate refresh unavailable", icon: "info.circle", style: .glass) {
                                     certs.refreshCert()
                                 }
 
@@ -56,7 +68,7 @@ struct SettingsView: View {
                                     showLogout = true
                                 }
                             } else {
-                                Text("Use the Apple Developer Portal screen below to sign in with Apple ID, complete 2FA, load teams, and request a development certificate.")
+                                Text("Use Apple Developer Portal sign-in to authenticate with Apple ID, complete 2FA, load teams, and request a development certificate.")
                                     .font(.subheadline)
                                     .foregroundColor(Theme.textSecondary)
 
@@ -64,7 +76,7 @@ struct SettingsView: View {
                                     .textInputAutocapitalization(.never)
                                     .keyboardType(.emailAddress)
 
-                                PurpleButton(title: "Save email only", icon: "envelope") {
+                                PurpleButton(title: "Save email only", icon: "envelope", style: .glass) {
                                     certs.login(email: email.isEmpty ? certs.appleID : email)
                                     email = ""
                                 }
@@ -81,75 +93,47 @@ struct SettingsView: View {
                             }
                         }
                         .padding(16)
-                        .background(Theme.cardGradient)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                        )
+                        .glassCard(cornerRadius: 20)
 
-                        NavigationLink {
-                            AppleDeveloperPortalSignInView()
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "person.crop.circle.badge.checkmark")
-                                    .font(.title3)
-                                    .foregroundColor(Theme.neon)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Apple ID sign-in & 2FA")
-                                        .font(.headline)
-                                        .foregroundColor(Theme.textPrimary)
-                                    Text("Apple ID + 2FA + development certificate")
-                                        .font(.caption)
-                                        .foregroundColor(Theme.textSecondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundColor(Theme.textSecondary)
+                        // Navigation links
+                        VStack(spacing: 12) {
+                            NavigationLink {
+                                AppleDeveloperPortalSignInView()
+                            } label: {
+                                GlassLinkCard(
+                                    icon: "person.crop.circle.badge.checkmark",
+                                    title: "Apple ID sign-in & 2FA",
+                                    subtitle: "Apple ID + 2FA + development certificate",
+                                    iconColor: Theme.neon
+                                )
                             }
-                            .padding(16)
-                            .background(Theme.surfaceElevated)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
+                            .buttonStyle(.plain)
 
-                        NavigationLink {
-                            AnisetteServerSettingsView()
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "server.rack")
-                                    .font(.title3)
-                                    .foregroundColor(Theme.neon)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Anisette servers")
-                                        .font(.headline)
-                                        .foregroundColor(Theme.textPrimary)
-                                    Text("Configure a SideStore-compatible catalog URL")
-                                        .font(.caption)
-                                        .foregroundColor(Theme.textSecondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundColor(Theme.textSecondary)
+                            NavigationLink {
+                                AnisetteServerSettingsView()
+                            } label: {
+                                GlassLinkCard(
+                                    icon: "server.rack",
+                                    title: "Anisette servers",
+                                    subtitle: "Configure a SideStore-compatible catalog URL",
+                                    iconColor: Theme.accent
+                                )
                             }
-                            .padding(16)
-                            .background(Theme.surfaceElevated)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
 
-                        // About sideload
-                        VStack(alignment: .leading, spacing: 12) {
+                        // Sideloading info
+                        VStack(alignment: .leading, spacing: 14) {
                             SectionHeader(title: "Sideloading", icon: "shippingbox.fill", color: Theme.neon)
 
                             infoLine(icon: "info.circle", text: "Free Apple ID = 7-day certificate, max 3 apps, 10 app IDs.")
                             infoLine(icon: "arrow.triangle.2.circlepath", text: "Refresh before expiry or apps stop launching.")
-                            infoLine(icon: "lock.shield", text: "Apple ID authentication and certificate requests use SideSign; IPA signing and device installation are separate steps.")
+                            infoLine(icon: "lock.shield", text: "Auth & cert requests use SideSign; IPA signing and install are separate steps.")
                         }
+                        .padding(16)
+                        .glassCard(cornerRadius: 18, intensity: 0.8)
 
-                        // App info
+                        // About
                         VStack(alignment: .leading, spacing: 12) {
                             SectionHeader(title: "About", icon: "info.circle", color: Theme.textSecondary)
 
@@ -158,11 +142,10 @@ struct SettingsView: View {
                             row("Min iOS", "16.0")
                         }
                         .padding(16)
-                        .background(Theme.surfaceElevated)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .glassCard(cornerRadius: 18, intensity: 0.75)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 32)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 110)
                 }
             }
             .navigationBarHidden(true)
