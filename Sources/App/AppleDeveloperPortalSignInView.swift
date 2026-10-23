@@ -186,7 +186,7 @@ final class SideSignAppleAccountProvider: ObservableObject {
             try KeychainVault.save(p12, account: "sidesign-development-certificate-p12")
             try KeychainVault.save(Data(p12Password.utf8), account: "sidesign-development-certificate-password")
             certificateName = keyStore.certificate.name
-            certificateExpires = keyStore.certificate.expirationDate
+            certificateExpires = keyStore.certificate.expiryDate
             hasCertificate = true
             status = "Apple issued a development certificate and its private key was saved to this device's Keychain."
         } catch {
