@@ -1,137 +1,84 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Credential and 2FA UI for the provider boundary. The default app build has
-/// no real Apple GSA provider, so it fails closed instead of simulating login.
 @MainActor
-final class AppleDeveloperPortalSignInModel: ObservableObject {
-    @Published var appleID = ""
-    @Published var password = ""
-    @Published var verificationCode = ""
-    @Published private(set) var step: AppleAuthenticationStep = .credentials
+final class AppStoreConnectSignInModel: ObservableObject {
+    @Published var issuerID = ""
+    @Published var keyID = ""
+    @Published private(set) var hasPrivateKey = false
     @Published private(set) var isBusy = false
+    @Published private(set) var statusMessage: String?
+    @Published private(set) var apps: [AppStoreConnectApp] = []
+    private var privateKeyPEM = ""
 
-    private let provider: (any AppleDeveloperPortalAuthenticating)?
-    private var verificationContinuation: CheckedContinuation<AppleVerificationResponse, Never>?
-
-    init(provider: (any AppleDeveloperPortalAuthenticating)? = nil) {
-        self.provider = provider
-    }
-
-    var canSubmit: Bool {
-        !isBusy && appleID.contains("@") && !password.isEmpty && provider != nil
-    }
-
-    var availableVerificationMethods: [AppleVerificationMethod] {
-        guard case .selectingVerificationMethod(let methods) = step else { return [] }
-        return methods
-    }
-
-    var canSubmitVerificationCode: Bool {
-        guard case .awaitingVerificationCode = step else { return false }
-        let code = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !code.isEmpty && verificationContinuation != nil
-    }
-
-    func signIn() async {
-        guard !isBusy else { return }
-        guard let provider else {
-            password = ""
-            step = .failed(message: AppleDeveloperPortalAuthError.providerUnavailable.localizedDescription)
-            return
+    init() {
+        if let data = try? KeychainVault.load(account: "app-store-connect-api-key"),
+           let saved = try? JSONDecoder().decode(AppStoreConnectAPIKey.self, from: data) {
+            issuerID = saved.issuerID
+            keyID = saved.keyID
+            privateKeyPEM = saved.privateKeyPEM
+            hasPrivateKey = true
         }
+    }
 
-        let trimmedID = appleID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedID.contains("@") else {
-            step = .failed(message: AppleDeveloperPortalAuthError.invalidCredentials.localizedDescription)
-            return
-        }
+    var canConnect: Bool {
+        !isBusy && !issuerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !keyID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hasPrivateKey
+    }
 
-        isBusy = true
-        step = .preparingAnisette
-        defer {
-            password = ""
-            isBusy = false
-        }
-
+    func importPrivateKey(from url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
         do {
-            let credentials = AppleAuthenticationCredentials(appleID: trimmedID, password: password)
-            let session = try await provider.authenticate(credentials: credentials) { [weak self] challenge in
-                guard let self else { return .cancel }
-                return await self.respond(to: challenge)
-            }
-            try KeychainVault.save(session.opaqueSessionData)
-            step = .authenticated(accountEmail: session.accountEmail)
-        } catch is CancellationError {
-            step = .failed(message: AppleDeveloperPortalAuthError.cancelled.localizedDescription)
-        } catch let error as AppleDeveloperPortalAuthError {
-            step = .failed(message: error.localizedDescription)
-        } catch {
-            step = .failed(message: "Apple sign-in failed. Check the connection and try again.")
-        }
-    }
-
-    func chooseVerificationMethod(_ method: AppleVerificationMethod) {
-        guard availableVerificationMethods.contains(method),
-              let continuation = verificationContinuation else { return }
-        verificationContinuation = nil
-        continuation.resume(returning: .choose(method))
-    }
-
-    func submitVerificationCode() {
-        let code = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !code.isEmpty, let continuation = verificationContinuation else { return }
-        verificationCode = ""
-        verificationContinuation = nil
-        continuation.resume(returning: .code(code))
-    }
-
-    func cancelVerification() {
-        guard let continuation = verificationContinuation else { return }
-        verificationContinuation = nil
-        verificationCode = ""
-        continuation.resume(returning: .cancel)
-    }
-
-    func clear() {
-        cancelVerification()
-        password = ""
-        verificationCode = ""
-        step = .credentials
-    }
-
-    private func respond(to challenge: AppleVerificationChallenge) async -> AppleVerificationResponse {
-        await withCheckedContinuation { continuation in
-            // Only one verification prompt may be active for a provider attempt.
-            guard verificationContinuation == nil else {
-                continuation.resume(returning: .cancel)
+            let data = try Data(contentsOf: url)
+            guard let text = String(data: data, encoding: .utf8),
+                  text.contains("-----BEGIN PRIVATE KEY-----"),
+                  text.contains("-----END PRIVATE KEY-----") else {
+                statusMessage = "Choose the original PEM .p8 API private key."
                 return
             }
-            verificationContinuation = continuation
-            switch challenge {
-            case .chooseMethod(let methods):
-                guard !methods.isEmpty else {
-                    verificationContinuation = nil
-                    continuation.resume(returning: .cancel)
-                    return
-                }
-                step = .selectingVerificationMethod(methods)
-            case .enterCode(let method, let destination):
-                verificationCode = ""
-                step = .awaitingVerificationCode(method: method, destination: destination)
-            }
-        }
+            let key = AppStoreConnectAPIKey(issuerID: issuerID, keyID: keyID, privateKeyPEM: text)
+            _ = try AppStoreConnectAPI.makeTokenForValidation(key)
+            privateKeyPEM = text
+            hasPrivateKey = true
+            statusMessage = "Private key loaded. Connect to verify the API credentials."
+        } catch { statusMessage = error.localizedDescription }
+    }
+
+    func connect() async {
+        guard canConnect else { return }
+        isBusy = true
+        defer { isBusy = false }
+        let key = AppStoreConnectAPIKey(
+            issuerID: issuerID.trimmingCharacters(in: .whitespacesAndNewlines),
+            keyID: keyID.trimmingCharacters(in: .whitespacesAndNewlines),
+            privateKeyPEM: privateKeyPEM
+        )
+        do {
+            try KeychainVault.save(JSONEncoder().encode(key), account: "app-store-connect-api-key")
+            apps = try await AppStoreConnectAPI.listApps(using: key)
+            statusMessage = "Connected. Loaded \(apps.count) app(s) from App Store Connect."
+        } catch { statusMessage = error.localizedDescription }
+    }
+
+    func disconnect() {
+        do {
+            try KeychainVault.delete(account: "app-store-connect-api-key")
+            issuerID = ""; keyID = ""; privateKeyPEM = ""; hasPrivateKey = false
+            apps = []; statusMessage = "Saved API credentials removed from this device."
+        } catch { statusMessage = error.localizedDescription }
     }
 }
 
 struct AppleDeveloperPortalSignInView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var model = AppleDeveloperPortalSignInModel()
+    @StateObject private var model = AppStoreConnectSignInModel()
+    @State private var showingKeyImporter = false
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Theme.background.ignoresSafeArea()
-
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         Image(systemName: "apple.logo")
@@ -139,121 +86,67 @@ struct AppleDeveloperPortalSignInView: View {
                             .foregroundStyle(Theme.primaryGradient)
                             .frame(maxWidth: .infinity)
                             .padding(.top, 24)
-
-                        Text("Apple Developer sign-in")
-                            .font(.title2.bold())
-                            .foregroundStyle(Theme.textPrimary)
+                        Text("App Store Connect")
+                            .font(.title2.bold()).foregroundStyle(Theme.textPrimary)
                             .frame(maxWidth: .infinity)
-
-                        Text("Apple Developer authentication is not connected in this build yet. Sign-in is disabled until a verified, license-compatible provider is implemented. Do not enter your Apple ID password here.")
-                            .font(.subheadline)
-                            .foregroundStyle(Theme.textSecondary)
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            TextField("Apple ID email", text: $model.appleID)
-                                .textInputAutocapitalization(.never)
-                                .keyboardType(.emailAddress)
-                                .textContentType(.username)
-                                .autocorrectionDisabled()
-                                .padding(14)
-                                .background(Theme.surfaceElevated)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                            SecureField("Apple ID password", text: $model.password)
-                                .textContentType(.password)
-                                .padding(14)
-                                .background(Theme.surfaceElevated)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-
+                        Text("Use an official App Store Connect API key, not your Apple ID password. Create a Team API key in App Store Connect → Users and Access → Integrations. Enter its Issuer ID and Key ID, then select the downloaded .p8 file. The private key is stored in this device’s Keychain.")
+                            .font(.subheadline).foregroundStyle(Theme.textSecondary)
+                        VStack(spacing: 12) {
+                            TextField("Issuer ID", text: $model.issuerID)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .textFieldStyle(.roundedBorder)
+                            TextField("Key ID", text: $model.keyID)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .textFieldStyle(.roundedBorder)
                             Button {
-                                Task { await model.signIn() }
+                                showingKeyImporter = true
+                            } label: {
+                                Label(model.hasPrivateKey ? "Replace .p8 private key" : "Choose .p8 private key",
+                                      systemImage: "key.horizontal").frame(maxWidth: .infinity).padding(10)
+                            }.buttonStyle(.bordered)
+                            Button {
+                                Task { await model.connect() }
                             } label: {
                                 HStack {
                                     if model.isBusy { ProgressView().tint(.white) }
-                                    Text("Sign in").fontWeight(.semibold)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(14)
-                                .background(Theme.primaryGradient)
-                                .foregroundStyle(.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                            .disabled(!model.canSubmit)
+                                    Text("Connect and load apps").fontWeight(.semibold)
+                                }.frame(maxWidth: .infinity).padding(14)
+                                    .background(Theme.primaryGradient).foregroundStyle(.white)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }.disabled(!model.canConnect)
                         }
-
-                        statusView
-                    }
-                    .padding(20)
+                        if let status = model.statusMessage {
+                            Text(status).font(.subheadline).foregroundStyle(Theme.textSecondary)
+                                .textSelection(.enabled)
+                        }
+                        if !model.apps.isEmpty {
+                            Text("Apps in this account").font(.headline).foregroundStyle(Theme.textPrimary)
+                            ForEach(model.apps) { app in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(app.attributes.name).font(.body.weight(.semibold))
+                                        .foregroundStyle(Theme.textPrimary)
+                                    Text(app.attributes.bundleId).font(.caption.monospaced())
+                                        .foregroundStyle(Theme.textSecondary)
+                                }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                                    .background(Theme.surfaceElevated)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                        }
+                        Button("Remove saved API credentials", role: .destructive) {
+                            model.disconnect()
+                        }.disabled(!model.hasPrivateKey)
+                    }.padding(20)
                 }
             }
-            .navigationTitle("Apple ID")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Close") {
-                        model.clear()
-                        dismiss()
-                    }
+            .navigationTitle("Developer API").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
+            .fileImporter(isPresented: $showingKeyImporter, allowedContentTypes: [.data],
+                          allowsMultipleSelection: false) { result in
+                switch result {
+                case .success(let urls): if let url = urls.first { model.importPrivateKey(from: url) }
+                case .failure(let error): model.statusMessage = error.localizedDescription
                 }
             }
-            .onDisappear { model.clear() }
-        }
-    }
-
-    @ViewBuilder
-    private var statusView: some View {
-        switch model.step {
-        case .credentials:
-            EmptyView()
-        case .preparingAnisette:
-            Label("Preparing secure sign-in…", systemImage: "lock.shield")
-                .foregroundStyle(Theme.textSecondary)
-        case .selectingVerificationMethod(let methods):
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Choose a verification method").font(.headline)
-                ForEach(methods) { method in
-                    Button(method.title) {
-                        model.chooseVerificationMethod(method)
-                    }
-                    .buttonStyle(.bordered)
-                }
-                Button("Cancel verification", role: .cancel) {
-                    model.cancelVerification()
-                }
-                .foregroundStyle(Theme.warning)
-            }
-        case .awaitingVerificationCode(let method, let destination):
-            VStack(alignment: .leading, spacing: 10) {
-                Text(method.title).font(.headline)
-                if let destination, !destination.isEmpty {
-                    Text("Code destination: \(destination)")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                TextField("Verification code", text: $model.verificationCode)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .padding(14)
-                    .background(Theme.surfaceElevated)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                Button("Submit code") { model.submitVerificationCode() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.canSubmitVerificationCode)
-                Button("Cancel verification", role: .cancel) {
-                    model.cancelVerification()
-                }
-                .foregroundStyle(Theme.warning)
-            }
-        case .authenticating:
-            Label("Authenticating with Apple…", systemImage: "arrow.triangle.2.circlepath")
-                .foregroundStyle(Theme.textSecondary)
-        case .authenticated(let accountEmail):
-            Label("Authenticated: \(accountEmail)", systemImage: "checkmark.shield.fill")
-                .foregroundStyle(Theme.success)
-        case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(Theme.warning)
-                .font(.subheadline)
         }
     }
 }
