@@ -92,8 +92,6 @@ struct LibraryView: View {
         }
     }
 
-    // MARK: - Header
-
     private var header: some View {
         HStack {
             Button {
@@ -214,11 +212,7 @@ struct LibraryView: View {
             List {
                 ForEach(filteredList) { file in
                     Button {
-                        if isEditing {
-                            // selection mode later
-                        } else {
-                            menuTarget = file
-                        }
+                        if !isEditing { menuTarget = file }
                     } label: {
                         LibraryRow(file: file)
                     }
@@ -274,47 +268,10 @@ struct LibraryView: View {
         }
     }
 
-    // MARK: - Data
-
     private func reload() {
-        Task.detached(priority: .userInitiated) {
-            let imported = Self.loadIPAs(in: "ImportedIPAs")
-            let signed = Self.loadIPAs(in: "SignedIPAs")
-            await MainActor.run {
-                importedFiles = imported
-                signedFiles = signed
-            }
-        }
-    }
-
-    private static func loadIPAs(in folder: String) -> [LibraryIPA] {
-        do {
-            let docs = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            let dir = docs.appendingPathComponent(folder, isDirectory: true)
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let urls = try FileManager.default.contentsOfDirectory(
-                at: dir,
-                includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles]
-            )
-            return urls
-                .filter { $0.pathExtension.lowercased() == "ipa" }
-                .compactMap { url -> LibraryIPA? in
-                    let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-                    guard values?.isRegularFile == true else { return nil }
-                    let meta = IPAMetadata.load(ipaURL: url)
-                    return LibraryIPA(
-                        url: url,
-                        size: Int64(values?.fileSize ?? 0),
-                        displayName: meta.displayName,
-                        version: meta.version,
-                        bundleID: meta.bundleID,
-                        iconPath: meta.iconPath
-                    )
-                }
-                .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-        } catch {
-            return []
+        Task {
+            importedFiles = LibraryIPALoader.load(in: "ImportedIPAs")
+            signedFiles = LibraryIPALoader.load(in: "SignedIPAs")
         }
     }
 
@@ -387,7 +344,38 @@ struct LibraryView: View {
     }
 }
 
-// MARK: - Model / Row / Detail
+enum LibraryIPALoader {
+    static func load(in folder: String) -> [LibraryIPA] {
+        do {
+            let docs = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let dir = docs.appendingPathComponent(folder, isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let urls = try FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+            return urls
+                .filter { $0.pathExtension.lowercased() == "ipa" }
+                .compactMap { url -> LibraryIPA? in
+                    let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                    guard values?.isRegularFile == true else { return nil }
+                    let meta = IPAMetadata.load(ipaURL: url)
+                    return LibraryIPA(
+                        url: url,
+                        size: Int64(values?.fileSize ?? 0),
+                        displayName: meta.displayName,
+                        version: meta.version,
+                        bundleID: meta.bundleID,
+                        iconPath: meta.iconPath
+                    )
+                }
+                .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        } catch {
+            return []
+        }
+    }
+}
 
 struct LibraryIPA: Identifiable, Hashable {
     let url: URL
@@ -459,7 +447,6 @@ struct AppIconView: View {
     }
 }
 
-/// Detail screen matching reference: Настройка / Подписание / big start button
 struct AppDetailView: View {
     @EnvironmentObject var certs: CertificateStore
     let file: LibraryIPA
@@ -480,7 +467,6 @@ struct AppDetailView: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
 
-                    // Identity card
                     VStack(spacing: 0) {
                         HStack(spacing: 14) {
                             AppIconView(path: file.iconPath)
@@ -499,7 +485,6 @@ struct AppDetailView: View {
                     .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(white: 0.12)))
                     .padding(.horizontal, 16)
 
-                    // Signing card
                     Text("Подписание")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(.white)
@@ -533,7 +518,6 @@ struct AppDetailView: View {
                     .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(white: 0.12)))
                     .padding(.horizontal, 16)
 
-                    // Advanced
                     Text("Передовой")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(.white)
