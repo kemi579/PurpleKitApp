@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct ClipboardHistoryTool: Tool {
     let id = "clipboard"
     let name = "Clipboard History"
@@ -10,6 +11,7 @@ struct ClipboardHistoryTool: Tool {
     var content: AnyView { AnyView(ClipboardHistoryView()) }
 }
 
+@MainActor
 struct ClipboardHistoryView: View {
     @State private var items: [ClipItem] = []
     @State private var timer: Timer?
