@@ -3,65 +3,74 @@ import UniformTypeIdentifiers
 import UIKit
 
 enum LibrarySegment: String, CaseIterable, Identifiable {
-    case downloaded = "Downloaded Apps"
-    case signed = "Signed Apps"
+    case downloaded = "Импортированные"
+    case signed = "Подписанные"
     var id: String { rawValue }
 }
 
 struct LibraryView: View {
-    @EnvironmentObject var certs: CertificateStore
-    @StateObject private var installer = DeviceInstaller.shared
-    @StateObject private var signer = IPASigningService.shared
+    @EnvironmentObject private var certs: CertificateStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var installer = DeviceInstaller.shared
+    @ObservedObject private var signer = IPASigningService.shared
+    @AppStorage("PurpleKit.library.sortBySize") private var sortBySize = false
+
+    var onOpenSettings: () -> Void = {}
 
     @State private var segment: LibrarySegment = .downloaded
     @State private var search = ""
     @State private var importedFiles: [LibraryIPA] = []
     @State private var signedFiles: [LibraryIPA] = []
     @State private var isImporterPresented = false
-    @State private var isEditing = false
     @State private var errorMessage: String?
     @State private var statusMessage: String?
     @State private var busyID: String?
     @State private var path = NavigationPath()
-    @State private var exportURL: URL?
-    @State private var showShare = false
-    @State private var menuTarget: LibraryIPA?
+    @State private var exportFile: LibraryIPA?
+    @State private var pendingDeletion: LibraryIPA?
+
+    private var isBusy: Bool {
+        busyID != nil || signer.isWorking || installer.isWorking
+    }
+
+    private var filteredList: [LibraryIPA] {
+        let base = segment == .downloaded ? importedFiles : signedFiles
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = base.filter {
+            query.isEmpty || $0.displayName.localizedCaseInsensitiveContains(query)
+                || ($0.bundleID?.localizedCaseInsensitiveContains(query) ?? false)
+                || $0.url.lastPathComponent.localizedCaseInsensitiveContains(query)
+        }
+        return matches.sorted {
+            if sortBySize && $0.size != $1.size { return $0.size > $1.size }
+            return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
                     header
+                    overview
                     searchBar
-                    segmentControl
-                    sectionHeader
-
-                    if let statusMessage {
-                        banner(statusMessage, color: Theme.success)
-                    }
-                    if let errorMessage {
-                        banner(errorMessage, color: Theme.warning)
-                    }
-                    if !certs.isCertHealthy && certs.isLoggedIn {
-                        banner(certs.certStatusText, color: Theme.warning)
-                    } else if !certs.isLoggedIn {
-                        banner("Войди в Apple ID (Настройки) и запроси сертификат.", color: Theme.warning)
-                    }
-
-                    contentList
+                    librarySection
                 }
+                .padding(20)
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
             }
-            .navigationBarHidden(true)
+            .background(LibraryBackground())
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: LibraryIPA.self) { file in
                 AppDetailView(
                     file: file,
-                    isSigned: signedFiles.contains(where: { $0.id == file.id }),
-                    busy: busyID == file.id,
+                    isSigned: signedFiles.contains { $0.id == file.id },
+                    busy: isBusy,
                     onSign: { Task { await sign(file) } },
                     onSignAndInstall: { Task { await install(file) } },
-                    onExport: { share(file) }
+                    onExport: { exportFile = file }
                 )
             }
             .fileImporter(
@@ -70,256 +79,369 @@ struct LibraryView: View {
                 allowsMultipleSelection: true,
                 onCompletion: handleImport
             )
-            .sheet(isPresented: $showShare) {
-                if let exportURL {
-                    ShareSheet(items: [exportURL])
-                }
+            .sheet(item: $exportFile) { file in
+                ShareSheet(items: [file.url])
             }
-            .confirmationDialog(menuTarget?.displayName ?? "", isPresented: Binding(
-                get: { menuTarget != nil },
-                set: { if !$0 { menuTarget = nil } }
-            ), titleVisibility: .visible) {
-                if let file = menuTarget {
-                    Button("Sign & Install") { Task { await install(file) } }
-                    Button("Знак") { Task { await sign(file) } }
-                    Button("Экспорт") { share(file) }
-                    Button("Получить информацию") { path.append(file) }
-                    Button("Удалить", role: .destructive) { deleteOne(file) }
-                    Button("Отмена", role: .cancel) {}
+            .alert("Удалить IPA?", isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            )) {
+                Button("Удалить", role: .destructive) {
+                    if let file = pendingDeletion { deleteOne(file) }
+                    pendingDeletion = nil
                 }
+                Button("Отмена", role: .cancel) { pendingDeletion = nil }
+            } message: {
+                Text("Файл «\(pendingDeletion?.displayName ?? "")» будет удалён из библиотеки. Установленное приложение останется на устройстве.")
             }
             .onAppear(perform: reload)
         }
     }
 
     private var header: some View {
-        HStack {
-            Button {
-                withAnimation { isEditing.toggle() }
-            } label: {
-                Text(isEditing ? "Готово" : "Править")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(Color.white.opacity(0.12)))
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Label("PURPLEKIT", systemImage: "square.stack.3d.up.fill")
+                    .font(.caption.weight(.bold))
+                    .tracking(2)
+                    .foregroundStyle(Theme.primaryLight)
+                Spacer()
+                Button(action: reload) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .background(Theme.surfaceElevated, in: Circle())
+                }
+                .accessibilityLabel("Обновить библиотеку")
+                .disabled(isBusy)
             }
-            .buttonStyle(.plain)
+            Text("Мои приложения")
+                .font(.largeTitle.bold())
+                .foregroundStyle(.white)
+                .accessibilityAddTraits(.isHeader)
+            Text("Твои IPA. Всё под рукой.")
+                .font(.subheadline)
+                .foregroundStyle(Theme.textSecondary)
+        }
+    }
 
-            Spacer()
+    private var overview: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("ТВОЯ БИБЛИОТЕКА")
+                        .font(.caption.weight(.semibold))
+                        .tracking(1.5)
+                        .foregroundStyle(Theme.primaryLight)
+                    Text("\(importedFiles.count + signedFiles.count) IPA")
+                        .font(.largeTitle.bold().monospacedDigit())
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                Image(systemName: "square.stack.3d.up")
+                    .font(.largeTitle)
+                    .foregroundStyle(Theme.primaryLight)
+                    .padding(12)
+                    .background(Theme.primary.opacity(0.16), in: RoundedRectangle(cornerRadius: 18))
+                    .accessibilityHidden(true)
+            }
+
+            HStack(spacing: 8) {
+                Label("\(signedFiles.count) подписано", systemImage: "signature")
+                Spacer(minLength: 8)
+                Text(ByteCountFormatter.string(
+                    fromByteCount: (importedFiles + signedFiles).reduce(Int64(0)) { $0 + $1.size },
+                    countStyle: .file
+                ))
+                .monospacedDigit()
+            }
+            .font(.caption)
+            .foregroundStyle(Theme.textSecondary)
 
             Button {
                 isImporterPresented = true
             } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(Color.white.opacity(0.12)))
+                Label("Импортировать IPA", systemImage: "plus")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background(Theme.primary, in: RoundedRectangle(cornerRadius: 16))
+                    .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
+            .disabled(isBusy)
+
+            Button(action: onOpenSettings) {
+                HStack(spacing: 10) {
+                    Image(systemName: certs.isCertHealthy ? "checkmark.shield.fill" : "person.crop.circle")
+                        .foregroundStyle(certs.isCertHealthy ? Theme.success : Theme.primaryLight)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(certs.isLoggedIn ? certs.certStatusText : "Подключи Apple ID")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white)
+                        Text("Apple ID и подключение устройства — в настройках")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Открывает настройки Apple ID и pairing")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .overlay(alignment: .bottom) {
-            Text("Библиотека")
-                .font(.system(size: 34, weight: .bold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.top, 44)
-                .padding(.bottom, 4)
+        .padding(20)
+        .background(
+            LinearGradient(
+                colors: [Theme.surfaceElevated, Theme.surface],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 28)
+                .strokeBorder(Theme.primaryLight.opacity(0.22), lineWidth: 1)
         }
-        .padding(.bottom, 44)
     }
 
     private var searchBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
-                .foregroundColor(Theme.textTertiary)
-            TextField("Поиск", text: $search)
-                .foregroundColor(.white)
+                .foregroundStyle(Theme.textSecondary)
+                .accessibilityHidden(true)
+            TextField("Название или Bundle ID", text: $search)
+                .font(.body)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .accessibilityLabel("Поиск приложений")
+            if !search.isEmpty {
+                Button { search = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Очистить поиск")
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(white: 0.14)))
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
+        .padding(.leading, 16)
+        .padding(.trailing, search.isEmpty ? 16 : 4)
+        .frame(minHeight: 52)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.08)) }
     }
 
-    private var segmentControl: some View {
-        HStack(spacing: 0) {
-            ForEach(LibrarySegment.allCases) { seg in
-                Button {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { segment = seg }
+    private var librarySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("Тип IPA", selection: $segment) {
+                ForEach(LibrarySegment.allCases) { item in
+                    Text(item.rawValue).tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            HStack {
+                Text(segment == .downloaded ? "Файлы IPA" : "Подписанные IPA")
+                    .font(.title3.bold())
+                    .accessibilityAddTraits(.isHeader)
+                Text("\(filteredList.count)")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(Theme.primaryLight)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Theme.primary.opacity(0.16), in: Capsule())
+                Spacer()
+                Menu {
+                    Picker("Сортировка", selection: $sortBySize) {
+                        Text("По названию").tag(false)
+                        Text("Сначала большие").tag(true)
+                    }
                 } label: {
-                    Text(seg.rawValue)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(segment == seg ? .white : Theme.textSecondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background {
-                            if segment == seg {
-                                Capsule().fill(Color(white: 0.28))
-                            }
-                        }
+                    Image(systemName: "arrow.up.arrow.down")
+                        .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.plain)
+                .accessibilityLabel("Сортировка приложений")
             }
-        }
-        .padding(3)
-        .background(Capsule().fill(Color(white: 0.12)))
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-    }
 
-    private var sectionHeader: some View {
-        HStack {
-            Text(segment.rawValue)
-                .font(.system(size: 22, weight: .bold))
-                .foregroundColor(.white)
-            Spacer()
-            Text("\(filteredList.count)")
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundColor(Theme.textSecondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(Color.white.opacity(0.1)))
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 6)
-    }
-
-    @ViewBuilder
-    private var contentList: some View {
-        if filteredList.isEmpty {
-            Spacer()
-            VStack(spacing: 10) {
-                Image(systemName: "shippingbox")
-                    .font(.system(size: 36))
-                    .foregroundColor(Theme.textTertiary)
-                Text(segment == .downloaded ? "Нет загруженных IPA" : "Нет подписанных IPA")
-                    .foregroundColor(Theme.textSecondary)
-                Button("Импорт IPA") { isImporterPresented = true }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(Theme.primaryLight)
+            if isBusy {
+                LibraryNotice(
+                    title: "Выполняется операция",
+                    message: signer.progressText.isEmpty ? installer.status : signer.progressText,
+                    icon: "hourglass", color: Theme.primaryLight, isProgress: true
+                )
             }
-            Spacer()
-        } else {
-            List {
-                ForEach(filteredList) { file in
-                    Button {
-                        if !isEditing { menuTarget = file }
-                    } label: {
-                        LibraryRow(file: file)
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(Color.black)
-                    .listRowSeparatorTint(Color.white.opacity(0.08))
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) { deleteOne(file) } label: {
-                            Label("Удалить", systemImage: "trash")
-                        }
-                    }
-                    .contextMenu {
-                        Button { Task { await install(file) } } label: {
-                            Label("Sign & Install", systemImage: "arrow.down.app.fill")
-                        }
-                        Button { Task { await sign(file) } } label: {
-                            Label("Знак", systemImage: "signature")
-                        }
-                        Button { share(file) } label: {
-                            Label("Экспорт", systemImage: "square.and.arrow.up")
-                        }
-                        Button { path.append(file) } label: {
-                            Label("Получить информацию", systemImage: "info.circle")
-                        }
-                        Divider()
-                        Button(role: .destructive) { deleteOne(file) } label: {
-                            Label("Удалить", systemImage: "trash")
-                        }
+            if let errorMessage {
+                LibraryNotice(title: "Не получилось", message: errorMessage, icon: "exclamationmark.circle", color: Theme.error)
+                Button("Закрыть сообщение") { self.errorMessage = nil }
+                    .font(.subheadline)
+                    .frame(minHeight: 44)
+            } else if let statusMessage {
+                LibraryNotice(title: "Готово", message: statusMessage, icon: "checkmark.circle", color: Theme.success)
+            }
+
+            if filteredList.isEmpty {
+                emptyState
+            } else {
+                LazyVStack(spacing: 12) {
+                    ForEach(filteredList) { file in
+                        appCard(file)
                     }
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
+
+            Label("Подписанный IPA ещё не означает установленное приложение.", systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 4)
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: segment)
     }
 
-    private func banner(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundColor(color)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 4)
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: search.isEmpty ? "square.and.arrow.down" : "magnifyingglass")
+                .font(.largeTitle)
+                .foregroundStyle(Theme.primaryLight)
+                .frame(width: 80, height: 80)
+                .background(Theme.primary.opacity(0.12), in: RoundedRectangle(cornerRadius: 24))
+                .accessibilityHidden(true)
+            Text(search.isEmpty
+                 ? (segment == .downloaded ? "Начни с первого IPA" : "Здесь будут подписанные IPA")
+                 : "Ничего не найдено")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text(search.isEmpty
+                 ? (segment == .downloaded
+                    ? "Добавь файл из приложения «Файлы».\nОн появится в твоей библиотеке."
+                    : "Открой импортированный IPA и выбери «Подписать».")
+                 : "Попробуй другое название или Bundle ID.")
+                .font(.subheadline)
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+            Button {
+                if !search.isEmpty { search = "" }
+                else if segment == .signed { segment = .downloaded }
+                else { isImporterPresented = true }
+            } label: {
+                Text(search.isEmpty ? (segment == .signed ? "К импортированным" : "Выбрать IPA") : "Сбросить поиск")
+                    .font(.headline)
+                    .foregroundStyle(Theme.primaryLight)
+                    .frame(minHeight: 44)
+            }
+            .disabled(isBusy)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 32)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
     }
 
-    private var filteredList: [LibraryIPA] {
-        let base = segment == .downloaded ? importedFiles : signedFiles
-        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return base }
-        return base.filter {
-            $0.displayName.lowercased().contains(q) ||
-            ($0.bundleID?.lowercased().contains(q) ?? false)
+    private func appCard(_ file: LibraryIPA) -> some View {
+        HStack(spacing: 4) {
+            Button { path.append(file) } label: {
+                LibraryRow(file: file, isSigned: segment == .signed)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Открывает сведения и действия с IPA")
+
+            Menu {
+                Button { path.append(file) } label: {
+                    Label("Сведения", systemImage: "info.circle")
+                }
+                Button { Task { await sign(file) } } label: {
+                    Label("Подписать", systemImage: "signature")
+                }
+                .disabled(isBusy)
+                Button { Task { await install(file) } } label: {
+                    Label("Подписать и установить", systemImage: "arrow.down.app")
+                }
+                .disabled(isBusy)
+                Button { exportFile = file } label: {
+                    Label("Экспортировать", systemImage: "square.and.arrow.up")
+                }
+                Divider()
+                Button(role: .destructive) { pendingDeletion = file } label: {
+                    Label("Удалить IPA", systemImage: "trash")
+                }
+                .disabled(isBusy)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.headline)
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Действия: \(file.displayName)")
         }
+        .padding(16)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22))
+        .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(.white.opacity(0.07)) }
     }
 
     private func reload() {
-        Task {
-            importedFiles = LibraryIPALoader.load(in: "ImportedIPAs")
-            signedFiles = LibraryIPALoader.load(in: "SignedIPAs")
-        }
+        importedFiles = LibraryIPALoader.load(in: "ImportedIPAs")
+        signedFiles = LibraryIPALoader.load(in: "SignedIPAs")
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {
         errorMessage = nil
+        statusMessage = nil
         switch result {
-        case .failure(let e):
-            errorMessage = e.localizedDescription
+        case .failure(let error):
+            errorMessage = error.localizedDescription
         case .success(let urls):
             do {
                 let docs = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                let dir = docs.appendingPathComponent("ImportedIPAs", isDirectory: true)
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let directory = docs.appendingPathComponent("ImportedIPAs", isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                var imported = 0
                 for url in urls {
                     let access = url.startAccessingSecurityScopedResource()
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
                     guard url.pathExtension.lowercased() == "ipa" else { continue }
-                    var dest = dir.appendingPathComponent(url.lastPathComponent)
-                    if FileManager.default.fileExists(atPath: dest.path) {
-                        let stem = url.deletingPathExtension().lastPathComponent
-                        dest = dir.appendingPathComponent("\(stem)-\(String(UUID().uuidString.prefix(6))).ipa")
+                    var destination = directory.appendingPathComponent(url.lastPathComponent)
+                    if FileManager.default.fileExists(atPath: destination.path) {
+                        destination = directory.appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).ipa")
                     }
-                    try FileManager.default.copyItem(at: url, to: dest)
+                    try FileManager.default.copyItem(at: url, to: destination)
+                    imported += 1
                 }
-                reload()
+                segment = .downloaded
+                search = ""
+                statusMessage = imported > 0 ? "Добавлено файлов: \(imported)" : nil
             } catch {
                 errorMessage = error.localizedDescription
             }
+            reload()
         }
     }
 
     private func deleteOne(_ file: LibraryIPA) {
-        try? FileManager.default.removeItem(at: file.url)
-        reload()
-    }
-
-    private func share(_ file: LibraryIPA) {
-        exportURL = file.url
-        showShare = true
+        guard !isBusy else { return }
+        do {
+            try FileManager.default.removeItem(at: file.url)
+            statusMessage = "«\(file.displayName)» удалён из библиотеки."
+            errorMessage = nil
+            reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func sign(_ file: LibraryIPA) async {
+        guard !isBusy else { return }
         busyID = file.id
+        errorMessage = nil
+        statusMessage = nil
         defer { busyID = nil }
         do {
             let signed = try await signer.sign(ipaURL: file.url)
             statusMessage = "Подписано: \(signed.lastPathComponent)"
-            errorMessage = nil
             segment = .signed
             reload()
             Haptic.success()
@@ -330,12 +452,15 @@ struct LibraryView: View {
     }
 
     private func install(_ file: LibraryIPA) async {
+        guard !isBusy else { return }
         busyID = file.id
+        errorMessage = nil
+        statusMessage = nil
         defer { busyID = nil }
         do {
             try await installer.signAndInstall(ipaURL: file.url)
             statusMessage = installer.status
-            errorMessage = nil
+            reload()
             Haptic.success()
         } catch {
             errorMessage = error.localizedDescription
@@ -399,56 +524,98 @@ struct LibraryIPA: Identifiable, Hashable {
 
 struct LibraryRow: View {
     let file: LibraryIPA
+    var isSigned = false
 
     var body: some View {
         HStack(spacing: 14) {
             AppIconView(path: file.iconPath)
-                .frame(width: 54, height: 54)
-
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(file.displayName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                Text(file.subtitle)
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.textSecondary)
-                    .lineLimit(1)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Text(file.version.map { "Версия \($0)" } ?? "Версия не указана")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                HStack(spacing: 8) {
+                    Label(isSigned ? "Подписан" : "IPA", systemImage: isSigned ? "signature" : "shippingbox")
+                        .foregroundStyle(isSigned ? Theme.success : Theme.primaryLight)
+                    Text(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .font(.caption)
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(Theme.textTertiary)
         }
-        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
     }
 }
 
 struct AppIconView: View {
     let path: String?
+    var size: CGFloat = 58
 
     var body: some View {
         Group {
-            if let path, let img = UIImage(contentsOfFile: path) {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
+            if let path, let image = UIImage(contentsOfFile: path) {
+                Image(uiImage: image).resizable().scaledToFill()
             } else {
-                LinearGradient(colors: [Theme.primary, Theme.primaryLight], startPoint: .topLeading, endPoint: .bottomTrailing)
+                RoundedRectangle(cornerRadius: size * 0.23)
+                    .fill(Theme.primaryGradient)
                     .overlay {
                         Image(systemName: "app.fill")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.9))
+                            .font(.title2)
+                            .foregroundStyle(.white.opacity(0.9))
                     }
             }
         }
-        .frame(width: 54, height: 54)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.23, style: .continuous))
+        .accessibilityHidden(true)
+    }
+}
+
+private struct LibraryBackground: View {
+    var body: some View {
+        LinearGradient(
+            colors: [Theme.surfaceElevated.opacity(0.65), Theme.background, Theme.background],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+    }
+}
+
+private struct LibraryNotice: View {
+    let title: String
+    let message: String
+    let icon: String
+    let color: Color
+    var isProgress = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            if isProgress {
+                ProgressView().tint(color)
+            } else {
+                Image(systemName: icon).foregroundStyle(color).accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(color)
+                Text(message).font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
     }
 }
 
 struct AppDetailView: View {
-    @EnvironmentObject var certs: CertificateStore
+    @EnvironmentObject private var certs: CertificateStore
     let file: LibraryIPA
     let isSigned: Bool
     let busy: Bool
@@ -457,165 +624,107 @@ struct AppDetailView: View {
     let onExport: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("Настройка")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-
-                    VStack(spacing: 0) {
-                        HStack(spacing: 14) {
-                            AppIconView(path: file.iconPath)
-                                .frame(width: 64, height: 64)
-                            Spacer()
-                        }
-                        .padding(16)
-
-                        divider
-                        row("Имя", file.displayName)
-                        divider
-                        row("Идентификатор", file.bundleID ?? "—")
-                        divider
-                        row("Версия", file.version ?? "—")
-                    }
-                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(white: 0.12)))
-                    .padding(.horizontal, 16)
-
-                    Text("Подписание")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(certs.appleID.isEmpty ? "Нет Apple ID" : certs.appleID)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white)
-                        Text(certs.certName.isEmpty ? "Нет сертификата" : certs.certName)
-                            .font(.subheadline)
-                            .foregroundColor(Theme.textSecondary)
-
-                        HStack(spacing: 10) {
-                            statusChip(
-                                text: certs.isCertHealthy ? "Valid" : (certs.isLoggedIn ? "No cert" : "Sign in"),
-                                color: certs.isCertHealthy ? Theme.success : Theme.warning,
-                                icon: certs.isCertHealthy ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
-                            )
-                            if let days = certs.daysLeft {
-                                statusChip(
-                                    text: "\(days) дней",
-                                    color: days > 3 ? Theme.success : Theme.error,
-                                    icon: "clock.fill"
-                                )
-                            }
-                        }
-                    }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(white: 0.12)))
-                    .padding(.horizontal, 16)
-
-                    Text("Передовой")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-
-                    VStack(spacing: 0) {
-                        navRow("Модифицировать")
-                        divider
-                        navRow("Характеристики")
-                    }
-                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(white: 0.12)))
-                    .padding(.horizontal, 16)
-
-                    VStack(spacing: 12) {
-                        Button(action: onSign) {
-                            Text(busy ? "Подписание…" : "Начните подписание")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
-                                .background(Capsule().fill(Color.accentColor))
-                        }
-                        .disabled(busy)
-
-                        Button(action: onSignAndInstall) {
-                            Text(busy ? "Установка…" : "Sign & Install")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(Capsule().fill(Theme.primary))
-                        }
-                        .disabled(busy)
-
-                        Button(action: onExport) {
-                            Text("Экспорт IPA")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundColor(Theme.textSecondary)
-                                .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 40)
+        ScrollView {
+            VStack(spacing: 24) {
+                VStack(spacing: 12) {
+                    AppIconView(path: file.iconPath, size: 96)
+                        .shadow(color: Theme.primary.opacity(0.2), radius: 24, y: 12)
+                    Text(file.displayName)
+                        .font(.title.bold())
+                        .multilineTextAlignment(.center)
+                    Text(file.version.map { "Версия \($0)" } ?? "Файл IPA")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.textSecondary)
+                    Label(isSigned ? "Подписанный файл" : "Импортированный файл",
+                          systemImage: isSigned ? "signature" : "shippingbox")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.primaryLight)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Theme.primary.opacity(0.14), in: Capsule())
                 }
+                .padding(.vertical, 16)
+
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("О приложении").font(.headline)
+                    detail("Bundle ID", file.bundleID ?? "Не удалось прочитать")
+                    Divider().overlay(.white.opacity(0.08))
+                    detail("Размер", ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))
+                    Divider().overlay(.white.opacity(0.08))
+                    detail("Файл", file.url.lastPathComponent)
+                }
+                .padding(20)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Подпись приложения", systemImage: "checkmark.shield")
+                        .font(.headline)
+                    Text(certs.appleID.isEmpty ? "Apple ID не подключён" : certs.appleID)
+                        .font(.subheadline)
+                        .textSelection(.enabled)
+                    Text(certs.certName.isEmpty ? "Сертификат не выбран. Открой настройки для подключения." : certs.certName)
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                    Text(certs.certStatusText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(certs.isCertHealthy ? Theme.success : Theme.warning)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
+
+                VStack(spacing: 12) {
+                    Button(action: onSignAndInstall) {
+                        Label(busy ? "Выполняется операция…" : "Подписать и установить",
+                              systemImage: busy ? "hourglass" : "arrow.down.app")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .background(Theme.primary, in: RoundedRectangle(cornerRadius: 16))
+                            .foregroundStyle(.white)
+                    }
+                    .disabled(busy)
+
+                    Button(action: onSign) {
+                        Label("Только подписать", systemImage: "signature")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 50)
+                            .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 16))
+                            .foregroundStyle(Theme.primaryLight)
+                    }
+                    .disabled(busy)
+
+                    Button(action: onExport) {
+                        Label("Экспортировать IPA", systemImage: "square.and.arrow.up")
+                            .font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }
+
+                    Text("Для установки нужны действующая сессия Apple ID, сертификат и подключение к устройству через pairing.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain)
+                .opacity(busy ? 0.65 : 1)
             }
+            .padding(20)
+            .frame(maxWidth: 680)
+            .frame(maxWidth: .infinity)
         }
-        .navigationTitle(file.displayName)
+        .background(LibraryBackground())
+        .navigationTitle("Сведения об IPA")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Сброс") {}
-                    .foregroundColor(.white)
-            }
-        }
+        .toolbar(.visible, for: .navigationBar)
     }
 
-    private var divider: some View {
-        Rectangle().fill(Color.white.opacity(0.08)).frame(height: 0.5).padding(.leading, 16)
-    }
-
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title).foregroundColor(.white)
-            Spacer()
-            Text(value)
-                .foregroundColor(Theme.textSecondary)
-                .lineLimit(1)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(Theme.textTertiary)
+    private func detail(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption).foregroundStyle(Theme.textSecondary)
+            Text(value).font(.subheadline).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-    }
-
-    private func navRow(_ title: String) -> some View {
-        HStack {
-            Text(title).foregroundColor(.white)
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(Theme.textTertiary)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-    }
-
-    private func statusChip(text: String, color: Color, icon: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-            Text(text)
-        }
-        .font(.caption.weight(.semibold))
-        .foregroundColor(.white)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Capsule().fill(color.opacity(0.85)))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
