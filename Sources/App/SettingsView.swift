@@ -2,379 +2,130 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
-    @EnvironmentObject var certs: CertificateStore
-    @StateObject private var signer = IPASigningService.shared
-    @StateObject private var installer = DeviceInstaller.shared
+    @EnvironmentObject private var certs: CertificateStore
+    @ObservedObject private var signer = IPASigningService.shared
+    @ObservedObject private var installer = DeviceInstaller.shared
     @State private var showSignIn = false
     @State private var showLogout = false
-    @State private var appear = false
+    @State private var showLibrary = false
     @State private var showPairingImporter = false
     @State private var pairingError: String?
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.clear
-
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 20) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("PurpleKit")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(Theme.textSecondary)
-                            Text("Settings")
-                                .font(.system(size: 30, weight: .bold))
-                                .foregroundStyle(Theme.primaryGradient)
-                        }
-                        .padding(.top, 8)
-                        .opacity(appear ? 1 : 0)
-                        .offset(y: appear ? 0 : 12)
-
-                        appleIDCard
-                            .opacity(appear ? 1 : 0)
-                            .offset(y: appear ? 0 : 16)
-
-                        pairingCard
-                            .opacity(appear ? 1 : 0)
-                            .offset(y: appear ? 0 : 17)
-
-                        deviceCard
-                            .opacity(appear ? 1 : 0)
-                            .offset(y: appear ? 0 : 18)
-
-                        preferencesCard
-                            .opacity(appear ? 1 : 0)
-                            .offset(y: appear ? 0 : 20)
-
-                        VStack(alignment: .leading, spacing: 14) {
-                            SectionHeader(title: "Sideloading", icon: "shippingbox.fill", color: Theme.neon)
-
-                            infoLine(icon: "info.circle", text: "Install = SideSign + minimuxer (same stack as SideStore).")
-                            infoLine(icon: "lock.iphone", text: "One-time pairing file from computer (iloader / SideStore / Jitterbug).")
-                            infoLine(icon: "network", text: "LocalDevVPN or StosVPN must be ON while installing.")
-                            infoLine(icon: "clock", text: "Free Apple ID: 7-day cert, max 3 apps.")
-                        }
-                        .padding(16)
-                        .glassCard(cornerRadius: 18, intensity: 0.8)
-                        .opacity(appear ? 1 : 0)
-                        .offset(y: appear ? 0 : 24)
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            SectionHeader(title: "About", icon: "info.circle", color: Theme.textSecondary)
-
-                            row("Version", "1.0.0")
-                            row("Bundle", "com.kemi579.PurpleKit")
-                            row("Min iOS", "16.0")
-                            row("Sign", "SideSign (GPL-3.0)")
-                            row("Install", "minimuxer (AGPL-3.0)")
-                        }
-                        .padding(16)
-                        .glassCard(cornerRadius: 18, intensity: 0.75)
-                        .opacity(appear ? 1 : 0)
-                        .offset(y: appear ? 0 : 28)
+            ToolLayout {
+                SectionHeading(title: "Приложения")
+                SettingsGroup {
+                    Button { showLibrary = true } label: {
+                        SettingsRow(title: "Библиотека IPA", icon: "square.stack.3d.up")
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 100)
+                    .buttonStyle(.plain)
+                }
+
+                SectionHeading(title: "Подписание")
+                SettingsGroup {
+                    Button { showSignIn = true } label: {
+                        SettingsRow(title: "Apple ID", value: certs.appleID.isEmpty ? "Не подключён" : certs.appleID,
+                                    icon: "person.crop.circle")
+                    }
+                    .buttonStyle(.plain)
+                    SettingsDivider(leading: 56)
+                    SettingsRow(title: "Сертификат", value: certs.certName.isEmpty ? "Не выдан" : certs.certName,
+                                showsChevron: false)
+                    if let expiry = certs.certExpires {
+                        SettingsDivider()
+                        SettingsRow(title: "Срок действия", value: expiry.formatted(date: .abbreviated, time: .omitted),
+                                    showsChevron: false)
+                    }
+                    StatusBadges {
+                        PillBadge(text: certs.isCertHealthy ? "Valid" : certs.certStatusText,
+                                  color: certs.isCertHealthy ? Theme.success : Theme.error)
+                        if let days = certs.daysLeft {
+                            PillBadge(text: "\(days) дней", color: days <= 2 ? Theme.error : Theme.secondaryText)
+                        }
+                    }
+                }
+                if certs.isLoggedIn {
+                    Button("Отключить Apple ID", role: .destructive) { showLogout = true }
+                        .frame(minHeight: 44)
+                }
+
+                SectionHeading(title: "Подключение")
+                SettingsGroup {
+                    Button { showPairingImporter = true } label: {
+                        SettingsRow(title: "Pairing-файл", value: installer.hasPairingFile ? "Импортирован" : "Добавить",
+                                    icon: "link")
+                    }
+                    .buttonStyle(.plain)
+                    SettingsDivider(leading: 56)
+                    NavigationLink { AnisetteServerSettingsView() } label: {
+                        SettingsRow(title: "Серверы Anisette", icon: "server.rack")
+                    }
+                    .buttonStyle(.plain)
+                    SettingsDivider()
+                    InputField(placeholder: "UDID устройства", text: $signer.deviceUDID)
+                }
+                Text("Pairing-файл нужно один раз получить на компьютере. Для установки включи совместимый локальный VPN.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                if let pairingError {
+                    Text(pairingError).font(.subheadline).foregroundStyle(Theme.error)
+                }
+
+                SectionHeading(title: "О приложении")
+                SettingsGroup {
+                    SettingsRow(title: "Версия", value: "1.0.0", showsChevron: false)
+                    SettingsDivider()
+                    SettingsRow(title: "Bundle ID", value: "com.kemi579.PurpleKit", showsChevron: false)
+                    SettingsDivider()
+                    SettingsRow(title: "Минимальная iOS", value: "16.0", showsChevron: false)
+                    SettingsDivider()
+                    SettingsRow(title: "Оформление", value: "Тёмное", showsChevron: false)
+                }
+                Text("Подпись: SideSign. Установка: Minimuxer. Сведения о лицензиях доступны в репозитории.")
+                    .font(.footnote).foregroundStyle(Theme.secondaryText)
+            }
+            .navigationTitle("Настройки")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if installer.hasPairingFile {
+                        Menu {
+                            Button(role: .destructive) { try? installer.clearPairingFile() } label: {
+                                Label("Удалить pairing-файл", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44)
+                        }
+                        .accessibilityLabel("Действия с подключением")
+                    }
                 }
             }
-            .navigationBarHidden(true)
-            .onAppear {
-                withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) {
-                    appear = true
-                }
+            .sheet(isPresented: $showLibrary) {
+                LibraryView(onOpenSettings: { showLibrary = false })
             }
-            .sheet(isPresented: $showSignIn) {
-                AppleDeveloperPortalSignInView()
-            }
-            .fileImporter(
-                isPresented: $showPairingImporter,
-                allowedContentTypes: [.data, .item],
-                allowsMultipleSelection: false
-            ) { result in
+            .sheet(isPresented: $showSignIn) { AppleDeveloperPortalSignInView() }
+            .fileImporter(isPresented: $showPairingImporter, allowedContentTypes: [.data, .item],
+                          allowsMultipleSelection: false) { result in
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
                     do {
                         try installer.importPairingFile(from: url)
                         pairingError = nil
-                    } catch {
-                        pairingError = error.localizedDescription
-                    }
-                case .failure(let error):
-                    pairingError = error.localizedDescription
+                    } catch { pairingError = error.localizedDescription }
+                case .failure(let error): pairingError = error.localizedDescription
                 }
             }
-            .confirmationDialog("Disconnect Apple ID?", isPresented: $showLogout, titleVisibility: .visible) {
-                Button("Disconnect", role: .destructive) {
+            .confirmationDialog("Отключить Apple ID?", isPresented: $showLogout, titleVisibility: .visible) {
+                Button("Отключить", role: .destructive) {
                     certs.logout()
                     try? KeychainVault.delete(account: "sidesign-auth-session")
                     try? KeychainVault.delete(account: "sidesign-development-certificate-p12")
                     try? KeychainVault.delete(account: "sidesign-development-certificate-password")
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Отмена", role: .cancel) {}
             }
-        }
-    }
-
-    private var pairingCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Pairing (minimuxer)", icon: "link", color: Theme.neon)
-
-            HStack {
-                Text(installer.hasPairingFile ? "Pairing file imported" : "No pairing file")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(installer.hasPairingFile ? Theme.success : Theme.warning)
-                Spacer()
-                if installer.isMuxerReady {
-                    Text("Muxer ready")
-                        .font(.caption2.weight(.bold))
-                        .foregroundColor(Theme.success)
-                }
-            }
-
-            Text("Same as SideStore: generate pairing once on a PC (iloader / idevicepair / Jitterbug), then import the .mobiledevicepairing file here.")
-                .font(.caption)
-                .foregroundColor(Theme.textSecondary)
-
-            if let pairingError {
-                Text(pairingError)
-                    .font(.caption)
-                    .foregroundColor(Theme.warning)
-            }
-
-            Button {
-                showPairingImporter = true
-            } label: {
-                Label("Import pairing file", systemImage: "doc.badge.plus")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundColor(.white)
-                    .background(Theme.primaryGradient)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .buttonStyle(.plain)
-
-            if installer.hasPairingFile {
-                Button {
-                    try? installer.clearPairingFile()
-                } label: {
-                    Text("Remove pairing file")
-                        .font(.caption.weight(.medium))
-                        .foregroundColor(Theme.error)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(16)
-        .glassCard(cornerRadius: 18)
-    }
-
-    private var appleIDCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Image(systemName: "apple.logo")
-                    .font(.title2)
-                    .foregroundColor(Theme.textPrimary)
-                Text("Apple ID")
-                    .font(.headline)
-                    .foregroundColor(Theme.textPrimary)
-                Spacer()
-                if certs.isLoggedIn {
-                    Text("Connected")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(Theme.success)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background {
-                            Capsule()
-                                .fill(Theme.success.opacity(0.15))
-                                .overlay {
-                                    Capsule()
-                                        .strokeBorder(Theme.success.opacity(0.3), lineWidth: 1)
-                                }
-                        }
-                }
-            }
-
-            if certs.isLoggedIn {
-                VStack(alignment: .leading, spacing: 10) {
-                    row("Account", certs.appleID)
-                    if !certs.teamName.isEmpty {
-                        row("Team", certs.teamName)
-                    }
-                    row("Certificate", certs.certName.isEmpty ? "Not issued yet" : certs.certName)
-                    if let exp = certs.certExpires {
-                        row("Expires", exp.formatted(date: .abbreviated, time: .omitted))
-                    }
-                    row("Status", certs.certStatusText)
-                }
-
-                Button {
-                    showSignIn = true
-                } label: {
-                    Label("Manage sign-in & certificate", systemImage: "person.crop.circle.badge.checkmark")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .foregroundColor(Theme.textPrimary)
-                        .background {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.white.opacity(0.06))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .strokeBorder(Theme.glassStroke, lineWidth: 1)
-                                }
-                        }
-                }
-                .buttonStyle(.plain)
-
-                PurpleButton(
-                    title: "Disconnect",
-                    icon: "rectangle.portrait.and.arrow.right",
-                    style: .secondary
-                ) {
-                    showLogout = true
-                }
-            } else {
-                Text("Sign in with a free Apple ID to request a development certificate. Password is never saved.")
-                    .font(.subheadline)
-                    .foregroundColor(Theme.textSecondary)
-
-                Button {
-                    showSignIn = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "apple.logo")
-                        Text("Sign in with Apple ID")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
-                    .foregroundColor(.white)
-                    .background(Theme.primaryGradient)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .shadow(color: Theme.primary.opacity(0.4), radius: 12, x: 0, y: 6)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(16)
-        .glassCard(cornerRadius: 20)
-    }
-
-    private var deviceCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "This device", icon: "iphone", color: Theme.primaryLight)
-
-            Text("UDID (auto-filled from minimuxer when possible)")
-                .font(.caption.weight(.medium))
-                .foregroundColor(Theme.textSecondary)
-
-            TextField("00008110-001A2B3C4D5E6F70", text: $signer.deviceUDID)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.system(size: 13, design: .monospaced))
-                .padding(12)
-                .background {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(Theme.glassStroke, lineWidth: 1)
-                        }
-                }
-                .foregroundColor(Theme.textPrimary)
-
-            Text("Or paste from Finder / Xcode if muxer has not filled it yet.")
-                .font(.caption2)
-                .foregroundColor(Theme.textTertiary)
-        }
-        .padding(16)
-        .glassCard(cornerRadius: 18)
-    }
-
-    private var preferencesCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "Preferences", icon: "slider.horizontal.3", color: Theme.accent)
-
-            NavigationLink {
-                AnisetteServerSettingsView()
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(Theme.accent)
-                        .frame(width: 36, height: 36)
-                        .background {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Theme.accent.opacity(0.14))
-                        }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Anisette catalog")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(Theme.textPrimary)
-                        Text("Servers list & health check")
-                            .font(.caption)
-                            .foregroundColor(Theme.textSecondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(Theme.textTertiary)
-                }
-                .padding(.vertical, 4)
-            }
-            .buttonStyle(.plain)
-
-            Divider().overlay(Color.white.opacity(0.08))
-
-            HStack {
-                Label("Appearance", systemImage: "moon.fill")
-                    .foregroundColor(Theme.textPrimary)
-                Spacer()
-                Text("Dark")
-                    .font(.subheadline)
-                    .foregroundColor(Theme.textSecondary)
-            }
-
-            Divider().overlay(Color.white.opacity(0.08))
-
-            HStack {
-                Label("Haptics", systemImage: "hand.tap.fill")
-                    .foregroundColor(Theme.textPrimary)
-                Spacer()
-                Text("On")
-                    .font(.subheadline)
-                    .foregroundColor(Theme.textSecondary)
-            }
-        }
-        .padding(16)
-        .glassCard(cornerRadius: 18)
-    }
-
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title)
-                .foregroundColor(Theme.textSecondary)
-                .font(.subheadline)
-            Spacer()
-            Text(value)
-                .foregroundColor(Theme.textPrimary)
-                .font(.system(size: 14, design: .monospaced))
-                .lineLimit(1)
-        }
-    }
-
-    private func infoLine(icon: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .foregroundColor(Theme.primaryLight)
-                .frame(width: 20)
-            Text(text)
-                .font(.subheadline)
-                .foregroundColor(Theme.textSecondary)
         }
     }
 }

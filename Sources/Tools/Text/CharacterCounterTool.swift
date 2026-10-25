@@ -23,37 +23,25 @@ struct CharacterCounterView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                PurpleTextField(placeholder: "Type or paste text…", text: $text, isMultiline: true)
-
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    statCard("Characters", "\(chars)")
-                    statCard("No spaces", "\(charsNoSpaces)")
-                    statCard("Words", "\(words)")
-                    statCard("Lines", "\(lines)")
-                }
-
-                PurpleButton(title: "Clear", icon: "trash", style: .secondary) {
-                    text = ""
-                }
+        ToolLayout {
+            SettingsGroup {
+                InputField(placeholder: "Текст", text: $text, isMultiline: true)
             }
-            .padding()
+            SettingsGroup {
+                SettingsRow(title: "Символы", value: "\(chars)", showsChevron: false)
+                SettingsDivider()
+                SettingsRow(title: "Без пробелов", value: "\(charsNoSpaces)", showsChevron: false)
+                SettingsDivider()
+                SettingsRow(title: "Слова", value: "\(words)", showsChevron: false)
+                SettingsDivider()
+                SettingsRow(title: "Строки", value: "\(lines)", showsChevron: false)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                IconAction(title: "Очистить", icon: "trash") { text = "" }
+            }
         }
     }
 
-    private func statCard(_ title: String, _ value: String) -> some View {
-        VStack(spacing: 6) {
-            Text(value)
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-                .foregroundStyle(Theme.primaryGradient)
-            Text(title)
-                .font(.caption)
-                .foregroundColor(Theme.textSecondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .background(Theme.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
 }

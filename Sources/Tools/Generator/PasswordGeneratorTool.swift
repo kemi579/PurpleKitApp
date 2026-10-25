@@ -19,34 +19,26 @@ struct PasswordGeneratorView: View {
     @State private var password = ""
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                ResultBox(title: "Password", value: password) {}
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Length: \(Int(length))")
-                        .foregroundColor(Theme.textSecondary)
+        ToolLayout(primaryTitle: "Сгенерировать", primaryAction: generate) {
+            ResultGroup(title: "Пароль", value: password)
+            SettingsGroup {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Длина: \(Int(length))").font(.body)
                     Slider(value: $length, in: 8...64, step: 1)
-                        .tint(Theme.primaryLight)
+                        .accessibilityLabel("Длина пароля")
                 }
-
-                Toggle("Uppercase (A-Z)", isOn: $useUpper).tint(Theme.primary)
-                Toggle("Lowercase (a-z)", isOn: $useLower).tint(Theme.primary)
-                Toggle("Digits (0-9)", isOn: $useDigits).tint(Theme.primary)
-                Toggle("Symbols (!@#…)", isOn: $useSymbols).tint(Theme.primary)
-
-                PurpleButton(title: "Generate", icon: "arrow.clockwise") {
-                    generate()
-                }
-
-                PurpleButton(title: "Copy", icon: "doc.on.doc", style: .secondary) {
-                    UIPasteboard.general.string = password
-                    Haptic.success()
-                }
+                .padding(Theme.rowInset)
+                SettingsDivider()
+                Toggle("Заглавные буквы (A–Z)", isOn: $useUpper).padding(Theme.rowInset)
+                SettingsDivider()
+                Toggle("Строчные буквы (a–z)", isOn: $useLower).padding(Theme.rowInset)
+                SettingsDivider()
+                Toggle("Цифры (0–9)", isOn: $useDigits).padding(Theme.rowInset)
+                SettingsDivider()
+                Toggle("Символы", isOn: $useSymbols).padding(Theme.rowInset)
             }
-            .padding()
-            .onAppear { generate() }
         }
+        .onAppear { generate() }
     }
 
     private func generate() {

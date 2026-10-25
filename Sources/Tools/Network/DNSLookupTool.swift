@@ -18,27 +18,11 @@ struct DNSLookupView: View {
     @State private var error: String?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                PurpleTextField(placeholder: "Hostname (e.g. google.com)", text: $host)
-
-                PurpleButton(title: "Lookup", icon: "magnifyingglass") {
-                    lookup()
-                }
-
-                if loading {
-                    ProgressView().tint(Theme.primaryLight)
-                }
-
-                if let error {
-                    Text(error).font(.caption).foregroundColor(Theme.error)
-                }
-
-                ForEach(results, id: \.self) { r in
-                    ResultBox(title: "Address", value: r) {}
-                }
-            }
-            .padding()
+        ToolLayout(primaryTitle: loading ? "Поиск…" : "Найти адреса", isBusy: loading, primaryAction: lookup) {
+            SettingsGroup { InputField(placeholder: "Имя хоста", text: $host) }
+            if loading { ProgressView("Поиск адресов…") }
+            if let error { Text(error).font(.subheadline).foregroundStyle(Theme.error) }
+            ForEach(results, id: \.self) { result in ResultGroup(title: "Адрес", value: result) }
         }
     }
 

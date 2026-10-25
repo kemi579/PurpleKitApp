@@ -370,172 +370,150 @@ final class SideSignAppleAccountProvider: ObservableObject {
 struct AppleDeveloperPortalSignInView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model = SideSignAppleAccountProvider()
-    @StateObject private var catalog = AnisetteServerCatalog.shared
+    @ObservedObject private var catalog = AnisetteServerCatalog.shared
     @State private var showServerList = false
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Apple ID")
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundStyle(Theme.primaryGradient)
-
+            ToolLayout(primaryTitle: model.isBusy ? "Вход…" : "Войти",
+                       isBusy: !model.canSignIn,
+                       primaryAction: { Task { await model.signIn() } }) {
+                SectionHeading(title: "Учётная запись")
+                SettingsGroup {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Apple ID").font(.caption).foregroundStyle(Theme.secondaryText)
                         TextField("Apple ID", text: $model.appleID)
+                            .keyboardType(.emailAddress)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                            .keyboardType(.emailAddress)
-                            .padding(14)
-                            .glassCard(cornerRadius: 14)
-
-                        SecureField("Password", text: $model.password)
-                            .padding(14)
-                            .glassCard(cornerRadius: 14)
-
-                        Button { showServerList = true } label: {
-                            HStack {
-                                Text(model.selectedServerAddress.isEmpty ? "Anisette server" : model.selectedServerAddress)
-                                    .lineLimit(1)
-                                    .foregroundColor(model.selectedServerAddress.isEmpty ? Theme.textTertiary : Theme.textPrimary)
-                                Spacer()
-                                Image(systemName: "chevron.down")
-                                    .foregroundColor(Theme.textSecondary)
-                            }
-                            .padding(14)
-                            .glassCard(cornerRadius: 14)
-                        }
-                        .buttonStyle(.plain)
-
-                        if model.twoFactorPhase == .waitingForDelivery {
-                            HStack(spacing: 12) {
-                                ProgressView().tint(Theme.primaryLight)
-                                Text("Ждём Allow на системном окне Apple…")
-                                    .font(.subheadline)
-                                    .foregroundColor(Theme.textSecondary)
-                            }
-                            .padding(14)
-                            .glassCard(cornerRadius: 14)
-                        }
-
-                        Button {
-                            Task { await model.signIn() }
-                        } label: {
-                            Text(model.isBusy ? "Signing in…" : "Sign In")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .foregroundColor(.white)
-                                .background(Theme.primaryGradient)
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        }
-                        .disabled(!model.canSignIn)
-                        .opacity(model.canSignIn ? 1 : 0.5)
-
-                        if model.account != nil {
-                            if !model.teams.isEmpty {
-                                Picker("Team", selection: $model.selectedTeamID) {
-                                    ForEach(model.teams, id: \.identifier) { t in
-                                        Text(t.name).tag(t.identifier)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-
-                                Button {
-                                    Task { await model.createDevelopmentCertificate() }
-                                } label: {
-                                    Text(model.hasCertificate ? "Re-issue certificate" : "Request development certificate")
-                                        .font(.subheadline.weight(.semibold))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 12)
-                                        .foregroundColor(.white)
-                                        .background(Theme.primary.opacity(0.85))
-                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                }
-                            }
-                            Button(role: .destructive) { model.signOut() } label: {
-                                Text("Sign out").frame(maxWidth: .infinity).padding(.vertical, 10)
-                            }
-                        }
-
-                        Text(model.status)
-                            .font(.caption)
-                            .foregroundColor(Theme.textSecondary)
-                            .textSelection(.enabled)
+                            .textContentType(.username)
+                            .frame(minHeight: 44)
                     }
-                    .padding(20)
+                    .padding(Theme.rowInset)
+                    SettingsDivider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Пароль").font(.caption).foregroundStyle(Theme.secondaryText)
+                        SecureField("Пароль", text: $model.password)
+                            .textContentType(.password)
+                            .frame(minHeight: 44)
+                    }
+                    .padding(Theme.rowInset)
+                    SettingsDivider()
+                    Button { showServerList = true } label: {
+                        SettingsRow(title: "Anisette", value: model.selectedServerAddress.isEmpty ? "Выбрать сервер" : model.selectedServerAddress)
+                    }
+                    .buttonStyle(.plain)
                 }
+
+                if model.twoFactorPhase == .waitingForDelivery {
+                    ProgressView("Подтверди вход в системном окне Apple.")
+                }
+
+                if model.account != nil {
+                    SectionHeading(title: "Команда и сертификат")
+                    SettingsGroup {
+                        if !model.teams.isEmpty {
+                            Picker("Команда", selection: $model.selectedTeamID) {
+                                ForEach(model.teams, id: \.identifier) { team in
+                                    Text(team.name).tag(team.identifier)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .padding(Theme.rowInset)
+                            SettingsDivider()
+                            Button {
+                                Task { await model.createDevelopmentCertificate() }
+                            } label: {
+                                SettingsRow(title: model.hasCertificate ? "Перевыпустить сертификат" : "Запросить сертификат")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(model.isBusy)
+                        }
+                    }
+                    Button("Выйти", role: .destructive) { model.signOut() }
+                        .frame(minHeight: 44)
+                }
+                Text(model.status).font(.footnote).foregroundStyle(Theme.secondaryText)
+                    .textSelection(.enabled)
             }
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Apple ID")
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button("Закрыть") { dismiss() }.frame(minHeight: 44)
                 }
             }
-            .sheet(isPresented: $showServerList) {
-                NavigationStack {
-                    List(catalog.servers, id: \.address) { server in
+            .sheet(isPresented: $showServerList) { serverList }
+            .sheet(isPresented: Binding(
+                get: { model.showTwoFactorSheet },
+                set: { if !$0 { model.cancelVerification() } }
+            )) { verification }
+        }
+    }
+
+    private var serverList: some View {
+        NavigationStack {
+            ToolLayout {
+                SettingsGroup {
+                    ForEach(catalog.servers, id: \.address) { server in
                         Button {
                             model.selectedServerAddress = server.address
                             showServerList = false
                         } label: {
-                            VStack(alignment: .leading) {
-                                Text(server.name).foregroundColor(.primary)
-                                Text(server.address).font(.caption).foregroundColor(.secondary)
-                            }
+                            SettingsRow(title: server.name, value: server.address, showsChevron: false)
                         }
+                        .buttonStyle(.plain)
+                        if server.id != catalog.servers.last?.id { SettingsDivider() }
                     }
-                    .navigationTitle("Anisette servers")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { showServerList = false }
-                        }
-                    }
-                    .task { await catalog.refresh() }
+                }
+                if catalog.isLoading { ProgressView("Загрузка серверов…") }
+                if let error = catalog.lastError {
+                    Text(error).font(.subheadline).foregroundStyle(Theme.error)
                 }
             }
-            .sheet(isPresented: Binding(
-                get: { model.showTwoFactorSheet },
-                set: { if !$0 { model.cancelVerification() } }
-            )) {
-                NavigationStack {
-                    VStack(spacing: 16) {
-                        Text(model.twoFactorTitle).font(.title3.weight(.bold))
-                        Text(model.twoFactorMessage)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                        if model.twoFactorPhase == .enterCode {
-                            TextField("6-digit code", text: $model.verificationCode)
-                                .keyboardType(.numberPad)
-                                .textInputAutocapitalization(.never)
-                                .multilineTextAlignment(.center)
-                                .font(.title2.monospacedDigit())
-                                .padding()
-                            Button("Submit") { model.submitCode() }
-                                .buttonStyle(.borderedProminent)
-                        } else if model.twoFactorPhase == .chooseMethod {
-                            Picker("Method", selection: $model.selectedDelivery) {
-                                Text("Trusted device").tag(TwoFactorDeliveryMode.trustedDevice)
-                                Text("SMS").tag(TwoFactorDeliveryMode.sms)
-                                Text("Voice").tag(TwoFactorDeliveryMode.voice)
-                            }
-                            .pickerStyle(.segmented)
-                            Button("Continue") { model.requestDelivery() }
-                                .buttonStyle(.borderedProminent)
+            .navigationTitle("Серверы Anisette")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Закрыть") { showServerList = false }.frame(minHeight: 44)
+                }
+            }
+            .task { await catalog.refresh() }
+        }
+    }
+
+    private var verification: some View {
+        NavigationStack {
+            ToolLayout(primaryTitle: model.twoFactorPhase == .enterCode ? "Подтвердить" : "Продолжить",
+                       primaryAction: {
+                           if model.twoFactorPhase == .enterCode { model.submitCode() }
+                           else { model.requestDelivery() }
+                       }) {
+                Text(model.twoFactorMessage).font(.body).foregroundStyle(Theme.secondaryText)
+                SettingsGroup {
+                    if model.twoFactorPhase == .enterCode {
+                        InputField(placeholder: "Код подтверждения", text: $model.verificationCode)
+                            .keyboardType(.numberPad)
+                            .textContentType(.oneTimeCode)
+                    } else if model.twoFactorPhase == .chooseMethod {
+                        Picker("Способ", selection: $model.selectedDelivery) {
+                            Text("Доверенное устройство").tag(TwoFactorDeliveryMode.trustedDevice)
+                            Text("SMS").tag(TwoFactorDeliveryMode.sms)
+                            Text("Звонок").tag(TwoFactorDeliveryMode.voice)
                         }
-                        Spacer()
-                    }
-                    .padding()
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") { model.cancelVerification() }
-                        }
+                        .pickerStyle(.menu)
+                        .padding(Theme.rowInset)
                     }
                 }
-                .presentationDetents([.medium])
+            }
+            .navigationTitle(model.twoFactorTitle)
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Отмена") { model.cancelVerification() }.frame(minHeight: 44)
+                }
             }
         }
+        .presentationDetents([.medium, .large])
     }
 }

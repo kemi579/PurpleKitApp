@@ -34,48 +34,35 @@ struct UnitConverterView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Picker("Category", selection: $category) {
+        ToolLayout {
+            SettingsGroup {
+                Picker("Категория", selection: $category) {
                     ForEach(Category.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: category) { _ in
-                    fromUnit = 0; toUnit = 1; convert()
-                }
-
-                PurpleTextField(placeholder: "Value", text: $input)
+                .pickerStyle(.menu)
+                .padding(Theme.rowInset)
+                .onChange(of: category) { _ in fromUnit = 0; toUnit = 1; convert() }
+                SettingsDivider()
+                InputField(placeholder: "Значение", text: $input)
                     .onChange(of: input) { _ in convert() }
-
-                HStack {
-                    Picker("From", selection: $fromUnit) {
-                        ForEach(0..<units.count, id: \.self) { Text(units[$0]).tag($0) }
-                    }
-                    .pickerStyle(.wheel)
-                    .frame(height: 100)
-                    .onChange(of: fromUnit) { _ in convert() }
-
-                    Image(systemName: "arrow.right")
-                        .foregroundColor(Theme.primaryLight)
-
-                    Picker("To", selection: $toUnit) {
-                        ForEach(0..<units.count, id: \.self) { Text(units[$0]).tag($0) }
-                    }
-                    .pickerStyle(.wheel)
-                    .frame(height: 100)
-                    .onChange(of: toUnit) { _ in convert() }
+                SettingsDivider()
+                Picker("Из", selection: $fromUnit) {
+                    ForEach(0..<units.count, id: \.self) { Text(units[$0]).tag($0) }
                 }
-
-                ResultBox(title: "Result", value: result) {}
-
-                PurpleButton(title: "Copy", icon: "doc.on.doc") {
-                    UIPasteboard.general.string = result
-                    Haptic.success()
+                .pickerStyle(.menu)
+                .padding(Theme.rowInset)
+                .onChange(of: fromUnit) { _ in convert() }
+                SettingsDivider()
+                Picker("В", selection: $toUnit) {
+                    ForEach(0..<units.count, id: \.self) { Text(units[$0]).tag($0) }
                 }
+                .pickerStyle(.menu)
+                .padding(Theme.rowInset)
+                .onChange(of: toUnit) { _ in convert() }
             }
-            .padding()
-            .onAppear { convert() }
+            ResultGroup(title: "Результат", value: result)
         }
+        .onAppear { convert() }
     }
 
     private func convert() {

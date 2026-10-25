@@ -16,45 +16,30 @@ struct QRGeneratorView: View {
     @State private var image: UIImage?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                PurpleTextField(placeholder: "Text or URL…", text: $text, isMultiline: true)
+        ToolLayout(primaryTitle: "Создать QR-код", primaryAction: generate) {
+            SettingsGroup {
+                InputField(placeholder: "Текст или URL", text: $text, isMultiline: true)
                     .onChange(of: text) { _ in generate() }
-
-                if let image {
-                    Image(uiImage: image)
-                        .interpolation(.none)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 220, height: 220)
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .padding()
-                } else {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Theme.surfaceElevated)
-                        .frame(width: 220, height: 220)
-                        .overlay(
-                            Image(systemName: "qrcode")
-                                .font(.system(size: 60))
-                                .foregroundColor(Theme.textSecondary)
-                        )
-                }
-
-                PurpleButton(title: "Generate", icon: "qrcode") {
-                    generate()
-                }
-
-                if image != nil {
-                    PurpleButton(title: "Copy Image", icon: "doc.on.doc", style: .secondary) {
-                        if let image {
+            }
+            if let image {
+                Image(uiImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 260)
+                    .padding(20)
+                    .background(Theme.qrBackground, in: RoundedRectangle(cornerRadius: Theme.groupRadius))
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("QR-код для введённого текста")
+                    .contextMenu {
+                        Button {
                             UIPasteboard.general.image = image
                             Haptic.success()
-                        }
+                        } label: { Label("Копировать изображение", systemImage: "doc.on.doc") }
                     }
-                }
+            } else {
+                EmptyStateView(title: "QR-код", message: "Введи текст или ссылку.")
             }
-            .padding()
         }
     }
 

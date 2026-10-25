@@ -15,29 +15,22 @@ struct UUIDGeneratorView: View {
     @State private var count: Double = 1
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                VStack(alignment: .leading) {
-                    Text("Count: \(Int(count))")
-                        .foregroundColor(Theme.textSecondary)
-                    Slider(value: $count, in: 1...20, step: 1)
-                        .tint(Theme.primaryLight)
+        ToolLayout(primaryTitle: "Сгенерировать", primaryAction: generate) {
+            SettingsGroup {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Количество: \(Int(count))").font(.body)
+                    Slider(value: $count, in: 1...20, step: 1).accessibilityLabel("Количество UUID")
                 }
-
-                PurpleButton(title: "Generate", icon: "arrow.clockwise") {
-                    generate()
-                }
-
-                ForEach(uuids, id: \.self) { uuid in
-                    ResultBox(title: "UUID", value: uuid) {
-                        UIPasteboard.general.string = uuid
-                        Haptic.success()
-                    }
+                .padding(Theme.rowInset)
+            }
+            ForEach(uuids, id: \.self) { uuid in
+                ResultGroup(title: "UUID", value: uuid) {
+                    UIPasteboard.general.string = uuid
+                    Haptic.success()
                 }
             }
-            .padding()
-            .onAppear { generate() }
         }
+        .onAppear { generate() }
     }
 
     private func generate() {

@@ -18,24 +18,14 @@ struct PortCheckerView: View {
     @State private var loading = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                PurpleTextField(placeholder: "Host", text: $host)
-                PurpleTextField(placeholder: "Port", text: $port)
-
-                PurpleButton(title: "Check", icon: "checkmark.circle") {
-                    check()
-                }
-
-                if loading {
-                    ProgressView().tint(Theme.primaryLight)
-                }
-
-                if !status.isEmpty {
-                    ResultBox(title: "Status", value: status) {}
-                }
+        ToolLayout(primaryTitle: loading ? "Проверка…" : "Проверить порт", isBusy: loading, primaryAction: check) {
+            SettingsGroup {
+                InputField(placeholder: "Хост", text: $host)
+                SettingsDivider()
+                InputField(placeholder: "Порт", text: $port)
             }
-            .padding()
+            if loading { ProgressView("Проверка соединения…") }
+            if !status.isEmpty { ResultGroup(title: "Статус", value: status) }
         }
     }
 

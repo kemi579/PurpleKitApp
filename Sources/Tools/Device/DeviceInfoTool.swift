@@ -16,47 +16,45 @@ struct DeviceInfoView: View {
     @State private var batteryState = ""
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                infoRow("Model", UIDevice.current.model)
-                infoRow("Name", UIDevice.current.name)
-                infoRow("System", "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)")
-                infoRow("Identifier", machineName())
-                infoRow("Battery", String(format: "%.0f%% (%@)", batteryLevel * 100, batteryState))
-                infoRow("Memory Total", formatBytes(ProcessInfo.processInfo.physicalMemory))
-                infoRow("Disk Total", formatBytes(diskSpace().total))
-                infoRow("Disk Free", formatBytes(diskSpace().free))
-                infoRow("Uptime", formatUptime(ProcessInfo.processInfo.systemUptime))
-                infoRow("Processors", "\(ProcessInfo.processInfo.processorCount)")
+        ToolLayout {
+            SettingsGroup {
+                infoRow("Модель", UIDevice.current.model)
+                SettingsDivider()
+                infoRow("Имя", UIDevice.current.name)
+                SettingsDivider()
+                infoRow("Система", "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)")
+                SettingsDivider()
+                infoRow("Идентификатор", machineName())
             }
-            .padding()
-            .onAppear {
-                UIDevice.current.isBatteryMonitoringEnabled = true
-                batteryLevel = UIDevice.current.batteryLevel
-                switch UIDevice.current.batteryState {
-                case .charging: batteryState = "Charging"
-                case .full: batteryState = "Full"
-                case .unplugged: batteryState = "Unplugged"
-                default: batteryState = "Unknown"
-                }
+            SectionHeading(title: "Состояние")
+            SettingsGroup {
+                infoRow("Батарея", String(format: "%.0f%% (%@)", batteryLevel * 100, batteryState))
+                SettingsDivider()
+                infoRow("Память", formatBytes(ProcessInfo.processInfo.physicalMemory))
+                SettingsDivider()
+                infoRow("Диск", formatBytes(diskSpace().total))
+                SettingsDivider()
+                infoRow("Свободно", formatBytes(diskSpace().free))
+                SettingsDivider()
+                infoRow("Время работы", formatUptime(ProcessInfo.processInfo.systemUptime))
+                SettingsDivider()
+                infoRow("Процессоры", "\(ProcessInfo.processInfo.processorCount)")
+            }
+        }
+        .onAppear {
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            batteryLevel = UIDevice.current.batteryLevel
+            switch UIDevice.current.batteryState {
+            case .charging: batteryState = "Charging"
+            case .full: batteryState = "Full"
+            case .unplugged: batteryState = "Unplugged"
+            default: batteryState = "Unknown"
             }
         }
     }
 
     private func infoRow(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title)
-                .foregroundColor(Theme.textSecondary)
-            Spacer()
-            Text(value)
-                .foregroundColor(Theme.textPrimary)
-                .font(.system(size: 14, design: .monospaced))
-                .multilineTextAlignment(.trailing)
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 12)
-        .background(Theme.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        SettingsRow(title: title, value: value, showsChevron: false)
     }
 
     private func machineName() -> String {

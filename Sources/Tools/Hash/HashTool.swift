@@ -20,32 +20,26 @@ struct HashView: View {
     @State private var showFilePicker = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                PurpleTextField(placeholder: "Text to hash…", text: $input, isMultiline: true)
+        ToolLayout(primaryTitle: "Выбрать файл", primaryAction: { showFilePicker = true }) {
+            SettingsGroup {
+                InputField(placeholder: "Текст", text: $input, isMultiline: true)
                     .onChange(of: input) { _ in computeText() }
-
-                PurpleButton(title: "Hash File", icon: "doc", style: .secondary) {
-                    showFilePicker = true
-                }
-
-                ResultBox(title: "MD5", value: md5) {}
-                ResultBox(title: "SHA-1", value: sha1) {}
-                ResultBox(title: "SHA-256", value: sha256) {}
-
-                PurpleButton(title: "Clear", icon: "trash", style: .secondary) {
-                    input = ""; md5 = ""; sha1 = ""; sha256 = ""
-                }
             }
-            .padding()
+            ResultGroup(title: "MD5", value: md5)
+            ResultGroup(title: "SHA-1", value: sha1)
+            ResultGroup(title: "SHA-256", value: sha256)
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                IconAction(title: "Очистить", icon: "trash") { input = ""; md5 = ""; sha1 = ""; sha256 = "" }
+            }
         }
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
                 hashFile(url)
-            case .failure:
-                Haptic.error()
+            case .failure: Haptic.error()
             }
         }
     }
