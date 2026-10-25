@@ -64,4 +64,34 @@ final class SideloadValidationTests: XCTestCase {
         XCTAssertFalse(matches(bundle: "com.example.app.extension"))
         XCTAssertFalse(matches(bundle: "*"))
     }
+
+    func testRewritesRootAndExtensionForTheSameTeam() {
+        XCTAssertEqual(
+            SideloadValidation.resignedBundleID(originalRoot: "com.example.app", bundleID: "com.example.app", teamID: "TEAM123"),
+            "com.example.app.purplekit.team123"
+        )
+        XCTAssertEqual(
+            SideloadValidation.resignedBundleID(originalRoot: "com.example.app", bundleID: "com.example.app.widget", teamID: "TEAM123"),
+            "com.example.app.purplekit.team123.widget"
+        )
+    }
+
+    func testReSigningDoesNotAppendTeamSuffixTwice() {
+        let root = "com.example.app.purplekit.team123"
+        XCTAssertEqual(
+            SideloadValidation.resignedBundleID(originalRoot: root, bundleID: root, teamID: "TEAM123"), root
+        )
+        XCTAssertEqual(
+            SideloadValidation.resignedBundleID(originalRoot: root, bundleID: root + ".widget", teamID: "TEAM123"),
+            root + ".widget"
+        )
+    }
+
+    func testRejectsUnrelatedExtensionAndOversizedIdentifier() {
+        XCTAssertNil(SideloadValidation.resignedBundleID(
+            originalRoot: "com.example.app", bundleID: "com.other.widget", teamID: "TEAM123"
+        ))
+        let root = String(repeating: "a", count: 250)
+        XCTAssertNil(SideloadValidation.resignedBundleID(originalRoot: root, bundleID: root, teamID: "TEAM123"))
+    }
 }

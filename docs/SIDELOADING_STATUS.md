@@ -11,6 +11,7 @@
 - Installation preflight validates credentials, connects Minimuxer and fetches the real device UDID **before** provisioning or signing.
 - Local pairing imports are validated before atomic replacement. Pairing files are protected and excluded from backups.
 - Signing checks that the certificate belongs to the selected team and is not expired.
+- Bundle IDs are rewritten consistently to stable team-specific identifiers in the signing workspace, avoiding collisions with IDs owned by another team.
 - Each app extension gets its own App ID and provisioning profile.
 - Profiles are checked against bundle ID, team, certificate, device UDID and expiry before signing.
 - Signed IPA output names are unique; another build is not silently overwritten.
@@ -38,6 +39,6 @@ A successful CI build verifies compilation and packaging. The validation unit te
 
 The complete Apple ID -> pairing -> signing -> device installation flow still requires a physical iPhone test. No physical-device validation is claimed by this change.
 
-Not all IPA packages can be installed: encrypted App Store packages, unavailable bundle identifiers, unsupported capabilities, developer-account limits and incompatible iOS versions may prevent signing or installation. Automatic periodic refresh, installed-app inventory, capability remapping and universal IPA compatibility are not implemented.
+Not all IPA packages can be installed: encrypted App Store packages, unavailable bundle identifiers, unsupported capabilities, developer-account limits and incompatible iOS versions may prevent signing or installation. Automatic periodic refresh, installed-app inventory, capability/App Group remapping and universal IPA compatibility are not implemented.
 
 The CI download is an **unsigned** PurpleKit IPA and still requires signing by a compatible sideloading tool. Third-party dependencies and their notices are documented in THIRD_PARTY_NOTICES.md.

@@ -13,6 +13,21 @@ public enum SideloadValidation {
             && parts.allSatisfy { $0.unicodeScalars.allSatisfy { hex.contains($0) } }
     }
 
+    /// Uses a stable team-specific ID so updates target the same installed app.
+    /// Changes apply only to the extracted signing workspace, never the imported IPA.
+    public static func resignedBundleID(originalRoot: String, bundleID: String, teamID: String) -> String? {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
+        guard !originalRoot.isEmpty, !teamID.isEmpty,
+              bundleID == originalRoot || bundleID.hasPrefix(originalRoot + "."),
+              (originalRoot + bundleID + teamID).unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            return nil
+        }
+        let suffix = ".purplekit." + teamID.lowercased()
+        let root = originalRoot.hasSuffix(suffix) ? originalRoot : originalRoot + suffix
+        let result = root + bundleID.dropFirst(originalRoot.count)
+        return result.utf8.count <= 255 ? result : nil
+    }
+
     public static func profileMatches(
         bundleID: String, teamID: String, udid: String, certificateSerial: String,
         profileBundleID: String, profileTeamID: String, profileDevices: [String],

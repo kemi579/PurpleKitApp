@@ -76,6 +76,15 @@ final class IPASigningService: ObservableObject {
             try fm.createDirectory(at: work, withIntermediateDirectories: true)
             return try fm.unzipAppBundle(at: ipaURL, to: work)
         }.value
+        guard let sourceApp = AppBundle(fileURL: appURL) else { throw SignError.missingBundleID }
+        progressText = "Подготовка идентификаторов приложения…"
+        for bundle in sourceApp.allAppBundles {
+            guard let identifier = SideloadValidation.resignedBundleID(
+                originalRoot: sourceApp.bundleIdentifier,
+                bundleID: bundle.bundleIdentifier, teamID: team.identifier
+            ) else { throw SignError.invalidBundleID }
+            try bundle.updateInfoPlist(with: ["CFBundleIdentifier": identifier])
+        }
         guard let app = AppBundle(fileURL: appURL) else { throw SignError.missingBundleID }
 
         progressText = "Регистрация устройства…"
@@ -220,7 +229,7 @@ final class IPASigningService: ObservableObject {
 
     enum SignError: LocalizedError, Equatable {
         case busy, notSignedIn, sessionExpired, noCertificate, certificateExpired
-        case noTeam, selectTeam, certificateTeamMismatch, missingUDID, missingBundleID, invalidProfile
+        case noTeam, selectTeam, certificateTeamMismatch, missingUDID, missingBundleID, invalidBundleID, invalidProfile
 
         var errorDescription: String? {
             switch self {
@@ -234,6 +243,7 @@ final class IPASigningService: ObservableObject {
             case .certificateTeamMismatch: return "Сертификат не найден в выбранной команде Apple или отозван. Запроси сертификат для этой команды."
             case .missingUDID: return "Нужен настоящий UDID. Импортируй pairing и включи локальный VPN либо введи UDID в настройках."
             case .missingBundleID: return "Не удалось прочитать приложение внутри IPA."
+            case .invalidBundleID: return "Не удалось подготовить согласованные Bundle ID приложения и расширений."
             case .invalidProfile: return "Профиль не подходит для этого приложения, устройства или сертификата."
             }
         }
