@@ -36,6 +36,9 @@ jobs:
           swift --version
           swift --version | grep -E 'Swift version 6\.'
 
+      - name: Test provisioning and UDID validation
+        run: swift test
+
       - name: Clone minimuxer (local path package)
         run: |
           set -euo pipefail

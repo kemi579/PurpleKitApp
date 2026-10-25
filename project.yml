@@ -25,6 +25,7 @@ settings:
     INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
     INFOPLIST_KEY_CFBundleDisplayName: "PurpleKit"
     INFOPLIST_KEY_LSRequiresIPhoneOS: "YES"
+    INFOPLIST_KEY_NSLocalNetworkUsageDescription: "PurpleKit connects to your paired iPhone to install signed applications."
     ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
 packages:
   SideSign:

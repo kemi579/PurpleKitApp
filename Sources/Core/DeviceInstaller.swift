@@ -3,16 +3,6 @@ import UIKit
 import Minimuxer
 import SideSign
 
-/// On-device install pipeline modeled after SideStore:
-/// 1) sign IPA (SideSign)
-/// 2) start minimuxer with pairing file + local VPN
-/// 3) send IPA over AFC
-/// 4) install via InstallationProxy (`installIpa`)
-///
-/// Pairing file CANNOT be generated purely "from the phone body" inside a sandboxed app.
-/// Apple stores lockdown pairing secrets outside the app sandbox. Same limitation as SideStore:
-/// you need a one-time host pair (PC/Mac via iloader/Jitterbug/SideStore) OR a wireless-pair
-/// session that writes a pairing file into Documents.
 @MainActor
 final class DeviceInstaller: ObservableObject {
     static let shared = DeviceInstaller()
@@ -25,179 +15,235 @@ final class DeviceInstaller: ObservableObject {
 
     private let signer = IPASigningService.shared
     private let fm = FileManager.default
-
+    private var isStarting = false
+    private var hasStartedCore = false
     private static let pairingFileName = "PurpleKit.mobiledevicepairing"
 
-    private init() {
-        refreshPairingState()
-        // Best-effort: if user already has SideStore pairing in the app group / Files copy path, ignore.
-        // Sandbox cannot read SideStore's container. Only our Documents.
-    }
+    private init() { refreshPairingState() }
 
     func refreshPairingState() {
-        if let url = try? pairingFileURL(), fm.fileExists(atPath: url.path) {
-            hasPairingFile = true
-        } else {
-            hasPairingFile = false
-        }
+        hasPairingFile = (try? pairingFileURL()).map { fm.fileExists(atPath: $0.path) } ?? false
     }
-
-    // MARK: - Pairing file
 
     func pairingFileURL() throws -> URL {
         let docs = try fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         return docs.appendingPathComponent(Self.pairingFileName)
     }
 
-    /// Import a pairing file exported by SideStore / Jitterbug / idevicepair / iloader.
     func importPairingFile(from source: URL) throws {
+        guard !isWorking && !isStarting && !signer.isWorking else { throw InstallError.busy }
         let access = source.startAccessingSecurityScopedResource()
         defer { if access { source.stopAccessingSecurityScopedResource() } }
-
-        let dest = try pairingFileURL()
-        if fm.fileExists(atPath: dest.path) {
-            try fm.removeItem(at: dest)
+        let values = try source.resourceValues(forKeys: [.fileSizeKey])
+        guard let size = values.fileSize, size > 0, size <= 1_048_576 else {
+            throw InstallError.invalidPairingFile
         }
-        try fm.copyItem(at: source, to: dest)
+        let data = try Data(contentsOf: source)
+        guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let host = plist["HostID"] as? String, !host.isEmpty,
+              let system = plist["SystemBUID"] as? String, !system.isEmpty,
+              plist["HostPrivateKey"] is Data,
+              plist["HostCertificate"] is Data else {
+            throw InstallError.invalidPairingFile
+        }
+        let destination = try pairingFileURL()
+        // Validate before replacing the previous pairing record. Atomic write preserves it on failure.
+        try data.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        var protectedURL = destination
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = true
+        try protectedURL.setResourceValues(resourceValues)
         hasPairingFile = true
-        status = "Pairing file saved."
+        isMuxerReady = false
+        deviceUDIDFromMuxer = nil
+        signer.deviceUDID = ""
+        status = "Pairing сохранён. Включи локальный VPN перед установкой."
     }
 
     func clearPairingFile() throws {
-        let dest = try pairingFileURL()
-        if fm.fileExists(atPath: dest.path) {
-            try fm.removeItem(at: dest)
-        }
+        guard !isWorking && !isStarting && !signer.isWorking else { throw InstallError.busy }
+        let destination = try pairingFileURL()
+        if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
         hasPairingFile = false
         isMuxerReady = false
         deviceUDIDFromMuxer = nil
-        status = "Pairing file removed."
+        signer.deviceUDID = ""
+        status = "Pairing удалён."
     }
-
-    // MARK: - Minimuxer lifecycle
 
     func startMuxer() async throws {
-        status = "Starting minimuxer…"
-        let pairing = try pairingFileURL()
-        guard fm.fileExists(atPath: pairing.path) else {
-            throw InstallError.missingPairingFile
-        }
+        guard !isWorking && !isStarting && !signer.isWorking else { throw InstallError.busy }
+        isWorking = true
+        defer { isWorking = false }
+        try await connectMuxer()
+    }
 
-        let docs = try fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let mountPath = docs.appendingPathComponent("DDI", isDirectory: true)
-        try fm.createDirectory(at: mountPath, withIntermediateDirectories: true)
+    private func connectMuxer() async throws {
+        guard !isStarting else { throw InstallError.busy }
+        isStarting = true
+        isMuxerReady = false
+        deviceUDIDFromMuxer = nil
+        defer { isStarting = false }
+        status = "Подключение к устройству…"
 
-        _ = await Minimuxer.shared.network.start()
-
-        try await Minimuxer.shared.core.start(
-            pairingFile: pairing.path,
-            mountPath: mountPath.path,
-            preferred: nil
-        )
-
-        let ready = await Minimuxer.shared.core.isReady(withNetworkCheck: true, withDDIMountCheck: false)
-        switch ready {
-        case .success(true):
-            isMuxerReady = true
-            if let udid = try? await Minimuxer.shared.core.fetchUDID() {
-                deviceUDIDFromMuxer = udid
-                if signer.deviceUDID.isEmpty {
-                    signer.deviceUDID = udid
-                }
+        do {
+            let pairing = try pairingFileURL()
+            guard fm.fileExists(atPath: pairing.path) else { throw InstallError.missingPairingFile }
+            if hasStartedCore {
+                try await Minimuxer.shared.core.stop()
+                hasStartedCore = false
             }
-            status = "Minimuxer ready."
-        case .success(false):
+            let docs = try fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let mountPath = docs.appendingPathComponent("DDI", isDirectory: true)
+            try fm.createDirectory(at: mountPath, withIntermediateDirectories: true)
+            _ = await Minimuxer.shared.network.start()
+            try await Minimuxer.shared.core.start(pairingFile: pairing.path, mountPath: mountPath.path, preferred: nil)
+            hasStartedCore = true
+
+            // Allow network discovery to settle instead of failing on the first readiness probe.
+            for attempt in 0..<12 {
+                try Task.checkCancellation()
+                let ready = await Minimuxer.shared.core.isReady(withNetworkCheck: true, withDDIMountCheck: false)
+                switch ready {
+                case .success(true):
+                    let udid = try await Minimuxer.shared.core.fetchUDID()
+                    guard SideloadValidation.isValidUDID(udid) else { throw InstallError.invalidUDID }
+                    deviceUDIDFromMuxer = udid
+                    signer.deviceUDID = udid
+                    isMuxerReady = true
+                    status = "Устройство подключено."
+                    return
+                case .success(false):
+                    if attempt == 11 { throw InstallError.deviceNotReachable }
+                case .failure(let error):
+                    throw InstallError.muxerFailed(Minimuxer.shared.core.describeError(error))
+                }
+                try await Task.sleep(nanoseconds: 500_000_000)
+            }
+        } catch {
             isMuxerReady = false
-            status = "Minimuxer started but device not reachable. Turn on LocalDevVPN / StosVPN."
-            throw InstallError.deviceNotReachable
-        case .failure(let err):
-            isMuxerReady = false
-            status = Minimuxer.shared.core.describeError(err)
-            throw InstallError.muxerFailed(Minimuxer.shared.core.describeError(err))
+            deviceUDIDFromMuxer = nil
+            status = error.localizedDescription
+            throw error
         }
     }
 
-    // MARK: - Sign + install
-
-    func signAndInstall(ipaURL: URL) async throws {
-        isWorking = true
-        defer { isWorking = false }
-
-        status = "Signing IPA…"
-        let signed = try await signer.sign(ipaURL: ipaURL)
-
-        status = "Preparing minimuxer…"
-        if !isMuxerReady {
-            try await startMuxer()
-        } else {
+    private func prepareDevice() async throws {
+        if isMuxerReady {
             let ready = await Minimuxer.shared.core.isReady(withNetworkCheck: true, withDDIMountCheck: false)
             if case .success(true) = ready {
-                // ok
-            } else {
-                try await startMuxer()
+                let udid = try await Minimuxer.shared.core.fetchUDID()
+                guard SideloadValidation.isValidUDID(udid) else { throw InstallError.invalidUDID }
+                deviceUDIDFromMuxer = udid
+                signer.deviceUDID = udid
+                return
             }
         }
-
-        status = "Reading signed IPA…"
-        let ipaData = try Data(contentsOf: signed)
-        let bundleID = try readBundleID(fromSignedIPA: signed)
-
-        status = "Sending IPA over AFC…"
-        try await Minimuxer.shared.core.sendIpaAfc(bundleId: bundleID, ipaBytes: ipaData)
-
-        status = "Installing \(bundleID)…"
-        try await Minimuxer.shared.core.installIpa(bundleId: bundleID)
-
-        status = "Installed \(bundleID). Check Home Screen."
+        try await connectMuxer()
     }
 
-    func installSigned(ipaURL: URL, bundleID: String) async throws {
+    func signAndInstall(ipaURL: URL) async throws {
+        guard !isWorking && !isStarting && !signer.isWorking else { throw InstallError.busy }
         isWorking = true
         defer { isWorking = false }
 
-        if !isMuxerReady {
-            try await startMuxer()
+        do {
+            // Local preflight avoids expensive setup when the account is missing.
+            try signer.validateCredentials()
+            // Pair and fetch the actual UDID BEFORE provisioning/signing.
+            try await prepareDevice()
+            status = "Подпись IPA…"
+            let signed = try await signer.sign(ipaURL: ipaURL)
+            try Task.checkCancellation()
+            // The connection may have changed while Apple was issuing profiles.
+            let signedForUDID = signer.deviceUDID
+            try await prepareDevice()
+            guard signer.deviceUDID.caseInsensitiveCompare(signedForUDID) == .orderedSame else {
+                throw InstallError.deviceChanged
+            }
+            try await transferAndInstall(ipaURL: signed, expectedBundleID: nil)
+        } catch {
+            status = "Установка не завершена: \(error.localizedDescription)"
+            throw error
         }
-
-        status = "Sending IPA over AFC…"
-        let data = try Data(contentsOf: ipaURL)
-        try await Minimuxer.shared.core.sendIpaAfc(bundleId: bundleID, ipaBytes: data)
-
-        status = "Installing…"
-        try await Minimuxer.shared.core.installIpa(bundleId: bundleID)
-        status = "Installed \(bundleID)."
     }
 
-    private func readBundleID(fromSignedIPA ipaURL: URL) throws -> String {
-        let work = fm.temporaryDirectory.appendingPathComponent("pk-bid-\(UUID().uuidString)", isDirectory: true)
+    /// Installs an already signed IPA without issuing a new certificate or profile.
+    func installSigned(ipaURL: URL, bundleID: String) async throws {
+        guard !isWorking && !isStarting && !signer.isWorking else { throw InstallError.busy }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            try await prepareDevice()
+            try await transferAndInstall(ipaURL: ipaURL, expectedBundleID: bundleID)
+        } catch {
+            status = "Установка не завершена: \(error.localizedDescription)"
+            throw error
+        }
+    }
+
+    private func transferAndInstall(ipaURL: URL, expectedBundleID: String?) async throws {
+        status = "Проверка подписанного IPA…"
+        let udid = signer.deviceUDID
+        let package = try await Task.detached(priority: .userInitiated) {
+            try Self.readSignedPackage(at: ipaURL, deviceUDID: udid)
+        }.value
+        if let expectedBundleID, expectedBundleID != package.bundleID {
+            throw InstallError.bundleMismatch
+        }
+        try Task.checkCancellation()
+        status = "Передача IPA на устройство…"
+        do {
+            try await Minimuxer.shared.core.sendIpaAfc(bundleId: package.bundleID, ipaBytes: package.data)
+            try Task.checkCancellation()
+            status = "Установка \(package.bundleID)…"
+            // Only report success after InstallationProxy completes.
+            try await Minimuxer.shared.core.installIpa(bundleId: package.bundleID)
+        } catch {
+            isMuxerReady = false
+            throw error
+        }
+        status = "Установлено: \(package.bundleID). Проверь экран «Домой»."
+    }
+
+    private nonisolated static func readSignedPackage(at url: URL, deviceUDID: String) throws -> (bundleID: String, data: Data) {
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("pk-install-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: work) }
-
-        let app = try fm.unzipAppBundle(at: ipaURL, to: work)
-        let info = app.appendingPathComponent("Info.plist")
-        guard let dict = NSDictionary(contentsOf: info) as? [String: Any],
-              let bid = dict["CFBundleIdentifier"] as? String else {
-            throw InstallError.missingBundleID
+        let appURL = try fm.unzipAppBundle(at: url, to: work)
+        guard let app = AppBundle(fileURL: appURL) else { throw InstallError.missingBundleID }
+        for bundle in app.allAppBundles {
+            guard let profile = bundle.provisioningProfile,
+                  profile.bundleIdentifier == bundle.bundleIdentifier,
+                  profile.expirationDate > Date(),
+                  profile.deviceIDs.contains(where: { $0.caseInsensitiveCompare(deviceUDID) == .orderedSame }) else {
+                throw InstallError.invalidSignedProfile
+            }
         }
-        return bid
+        return (app.bundleIdentifier, try Data(contentsOf: url))
     }
 
     enum InstallError: LocalizedError {
-        case missingPairingFile
-        case deviceNotReachable
+        case busy, missingPairingFile, invalidPairingFile, invalidUDID, deviceNotReachable
         case muxerFailed(String)
-        case missingBundleID
+        case missingBundleID, bundleMismatch, invalidSignedProfile, deviceChanged
 
         var errorDescription: String? {
             switch self {
+            case .busy: return "Другая операция уже выполняется. Дождись её завершения."
             case .missingPairingFile:
-                return "Pairing file is not on the phone for apps to read. Import .mobiledevicepairing once from PC (iloader / SideStore / Jitterbug) — same as SideStore. Cannot auto-take it from the device sandbox."
+                return "Импортируй pairing-файл в настройках. Его нужно один раз получить на PC/Mac через совместимый инструмент pairing."
+            case .invalidPairingFile:
+                return "Это не корректный pairing-файл. Выбери исходный .mobiledevicepairing, экспортированный для этого iPhone."
+            case .invalidUDID: return "Устройство вернуло некорректный UDID. Проверь pairing."
             case .deviceNotReachable:
-                return "Device not reachable via minimuxer. Connect LocalDevVPN or StosVPN."
-            case .muxerFailed(let msg):
-                return "Minimuxer: \(msg)"
-            case .missingBundleID:
-                return "Could not read CFBundleIdentifier from signed IPA."
+                return "iPhone недоступен. Включи совместимый локальный VPN и проверь pairing-файл."
+            case .muxerFailed(let message): return "Ошибка подключения: \(message)"
+            case .missingBundleID: return "Не удалось прочитать приложение внутри подписанного IPA."
+            case .bundleMismatch: return "Bundle ID подписанного IPA не совпадает с выбранным приложением."
+            case .invalidSignedProfile: return "Профиль IPA истёк или не подходит этому устройству. Подпиши файл заново."
+            case .deviceChanged: return "Подключённое устройство изменилось во время подписи. Повтори установку."
             }
         }
     }

@@ -9,98 +9,115 @@ final class IPASigningService: ObservableObject {
     @Published private(set) var isWorking = false
     @Published private(set) var progressText = ""
     @Published var deviceUDID: String {
-        didSet { UserDefaults.standard.set(deviceUDID, forKey: Keys.udid) }
-    }
-
-    private enum Keys {
-        static let udid = "PurpleKit.deviceUDID"
-        static let certID = "PurpleKit.certPortalID"
+        didSet { UserDefaults.standard.set(deviceUDID, forKey: "PurpleKit.deviceUDID") }
     }
 
     private let portal = DeveloperPortal.shared
-    private let fm = FileManager.default
 
     private init() {
-        deviceUDID = UserDefaults.standard.string(forKey: Keys.udid) ?? ""
-        // Best-effort placeholder — real device UDID for provisioning still needs pairing/muxer or paste.
-        if deviceUDID.isEmpty {
-            // NOT a real Apple UDID; only avoids empty field. User/muxer must set real one for install.
-            deviceUDID = UIDevice.current.identifierForVendor?.uuidString ?? ""
-        }
+        let saved = UserDefaults.standard.string(forKey: "PurpleKit.deviceUDID") ?? ""
+        deviceUDID = SideloadValidation.isValidUDID(saved) ? saved : ""
+    }
+
+    /// Validates local credentials without creating certificates or touching the portal.
+    func validateCredentials() throws {
+        _ = try loadAuthSession()
+        let keys = try loadKeyStore()
+        guard keys.certificate.expiryDate > Date() else { throw SignError.certificateExpired }
     }
 
     func sign(ipaURL: URL) async throws -> URL {
+        guard !isWorking else { throw SignError.busy }
         isWorking = true
         defer {
             isWorking = false
             progressText = ""
         }
 
-        progressText = "Loading Apple session…"
-        let auth: AuthSession
-        do {
-            auth = try loadAuthSession()
-        } catch {
-            throw error
-        }
+        progressText = "Проверка сессии Apple ID…"
+        let auth = try loadAuthSession()
+        let keyStore = try loadKeyStore()
+        guard keyStore.certificate.expiryDate > Date() else { throw SignError.certificateExpired }
+        guard SideloadValidation.isValidUDID(deviceUDID) else { throw SignError.missingUDID }
 
-        let keyStore: KeyStore
-        do {
-            keyStore = try loadKeyStore()
-        } catch {
-            throw error
-        }
-
-        progressText = "Loading team…"
+        progressText = "Проверка команды и сертификата…"
         let teams: [Team]
         do {
             teams = try await portal.fetchTeams(for: auth.account, session: auth.session)
         } catch {
             throw mapSessionError(error)
         }
-        guard let team = teams.first else { throw SignError.noTeam }
+        let selectedID = UserDefaults.standard.string(forKey: "PurpleKit.selectedTeamID") ?? ""
+        let selected = teams.first { $0.identifier == selectedID }
+        guard let team = selected ?? (selectedID.isEmpty && teams.count == 1 ? teams.first : nil) else {
+            throw teams.isEmpty ? SignError.noTeam : SignError.selectTeam
+        }
+        let certificates: [X509Certificate]
+        do {
+            certificates = try await portal.fetchCertificates(for: team, session: auth.session)
+        } catch {
+            throw mapSessionError(error)
+        }
+        guard let portalCertificate = certificates.first(where: {
+            $0.serialNumber.caseInsensitiveCompare(keyStore.certificate.serialNumber) == .orderedSame
+        }) else {
+            throw SignError.certificateTeamMismatch
+        }
+        let certificateID = portalCertificate.identifier ?? portalCertificate.serialNumber
+        CertificateStore.shared.applyAuthenticatedSession(email: auth.account.appleID, team: team.name)
+        CertificateStore.shared.applyCertificate(name: keyStore.certificate.name, expires: keyStore.certificate.expiryDate)
 
-        progressText = "Preparing workspace…"
-        let workDir = try makeWorkDir()
-        defer { try? fm.removeItem(at: workDir) }
+        progressText = "Распаковка и проверка IPA…"
+        let work = FileManager.default.temporaryDirectory.appendingPathComponent("PurpleKitSign-\(UUID().uuidString)", isDirectory: true)
+        // The workspace is unique to this operation and removed on every exit.
+        defer { try? FileManager.default.removeItem(at: work) }
+        let appURL = try await Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            try fm.createDirectory(at: work, withIntermediateDirectories: true)
+            return try fm.unzipAppBundle(at: ipaURL, to: work)
+        }.value
+        guard let app = AppBundle(fileURL: appURL) else { throw SignError.missingBundleID }
 
-        progressText = "Unpacking IPA…"
-        let appURL = try fm.unzipAppBundle(at: ipaURL, to: workDir)
-
-        progressText = "Reading bundle ID…"
-        let bundleID = try readBundleID(appURL: appURL)
-        let appName = appURL.deletingPathExtension().lastPathComponent
-
-        progressText = "Ensuring device is registered…"
+        progressText = "Регистрация устройства…"
         let device = try await ensureDevice(team: team, session: auth.session)
+        var profiles: [ProvisioningProfile] = []
+        // Extensions need profiles for their own bundle IDs. Never reuse the main app profile.
+        for bundle in app.allAppBundles {
+            try Task.checkCancellation()
+            progressText = "Профиль: \(bundle.bundleIdentifier)…"
+            let appID = try await ensureAppID(name: bundle.name, bundleID: bundle.bundleIdentifier, team: team, session: auth.session)
+            let profile = try await ensureProfile(
+                appID: appID, certificateID: certificateID,
+                certificateSerial: keyStore.certificate.serialNumber,
+                device: device, team: team, session: auth.session
+            )
+            profiles.append(profile)
+        }
 
-        progressText = "Ensuring App ID…"
-        let appID = try await ensureAppID(name: appName, bundleID: bundleID, team: team, session: auth.session)
+        progressText = "Подпись приложения и расширений…"
+        let bundleSigner = AppBundleSigner(team: team, keyStore: keyStore)
+        try await bundleSigner.signApp(at: appURL, provisioningProfiles: profiles)
 
-        progressText = "Fetching provisioning profile…"
-        let profile = try await ensureProfile(appID: appID, keyStore: keyStore, device: device, team: team, session: auth.session)
-
-        progressText = "Signing \(bundleID)…"
-        let signer = AppBundleSigner(team: team, keyStore: keyStore)
-        try await signer.signApp(at: appURL, provisioningProfiles: [profile])
-
-        progressText = "Packaging signed IPA…"
-        let signedTemp = try fm.zipAppBundle(at: appURL, compressionLevel: .none)
-        let outDir = try signedDirectory()
-        let outName = "\(appName)-signed.ipa"
-        let outURL = outDir.appendingPathComponent(outName)
-        if fm.fileExists(atPath: outURL.path) { try fm.removeItem(at: outURL) }
-        try fm.moveItem(at: signedTemp, to: outURL)
-
-        progressText = "Signed successfully."
-        return outURL
+        progressText = "Сохранение подписанного IPA…"
+        let output = try await Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            let zipped = try fm.zipAppBundle(at: appURL, compressionLevel: .none)
+            defer { try? fm.removeItem(at: zipped) }
+            let docs = try fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let directory = docs.appendingPathComponent("SignedIPAs", isDirectory: true)
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            let name = "\(appURL.deletingPathExtension().lastPathComponent)-\(UUID().uuidString)-signed.ipa"
+            let result = directory.appendingPathComponent(name)
+            try fm.moveItem(at: zipped, to: result)
+            return result
+        }.value
+        progressText = "IPA подписан."
+        return output
     }
 
     private func mapSessionError(_ error: Error) -> Error {
-        let raw = String(describing: error).lowercased()
-        let msg = (error as? LocalizedError)?.errorDescription?.lowercased() ?? raw
-        if msg.contains("1100") || msg.contains("session has expired") || msg.contains("please log in") || raw.contains("1100") {
-            // Wipe dead session so UI asks for login again
+        let message = String(describing: error).lowercased()
+        if message.contains("1100") || message.contains("session has expired") || message.contains("please log in") {
             try? KeychainVault.delete(account: "sidesign-auth-session")
             CertificateStore.shared.logout()
             return SignError.sessionExpired
@@ -113,7 +130,7 @@ final class IPASigningService: ObservableObject {
               let session = try? JSONDecoder().decode(AuthSession.self, from: data) else {
             throw SignError.notSignedIn
         }
-        if !session.session.isValid {
+        guard session.session.isValid else {
             try? KeychainVault.delete(account: "sidesign-auth-session")
             CertificateStore.shared.logout()
             throw SignError.sessionExpired
@@ -123,48 +140,26 @@ final class IPASigningService: ObservableObject {
 
     private func loadKeyStore() throws -> KeyStore {
         guard let p12 = try KeychainVault.load(account: "sidesign-development-certificate-p12"),
-              let passData = try KeychainVault.load(account: "sidesign-development-certificate-password"),
-              let password = String(data: passData, encoding: .utf8) else {
+              let passwordData = try KeychainVault.load(account: "sidesign-development-certificate-password"),
+              let password = String(data: passwordData, encoding: .utf8) else {
             throw SignError.noCertificate
         }
         return try KeyStore(p12Data: p12, password: password)
     }
 
     private func ensureDevice(team: Team, session: Session) async throws -> Device {
-        var udid = deviceUDID.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Prefer muxer UDID when available
-        if let muxerUDID = DeviceInstaller.shared.deviceUDIDFromMuxer, !muxerUDID.isEmpty {
-            udid = muxerUDID
-            deviceUDID = muxerUDID
-        }
-        guard !udid.isEmpty else { throw SignError.missingUDID }
-        // identifierForVendor looks like UUID — Apple portal needs real 25-char UDID
-        if udid.count == 36, udid.contains("-") {
-            throw SignError.missingUDID
-        }
-
-        let devices: [Device]
+        let udid = deviceUDID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard SideloadValidation.isValidUDID(udid) else { throw SignError.missingUDID }
         do {
-            devices = try await portal.fetchDevices(for: team, types: .all, session: session)
-        } catch {
-            throw mapSessionError(error)
-        }
-        if let existing = devices.first(where: { $0.identifier.caseInsensitiveCompare(udid) == .orderedSame }) {
-            return existing
-        }
-        do {
-            return try await portal.registerDevice(
-                name: UIDevice.current.name,
-                identifier: udid,
-                type: .iPhone,
-                team: team,
-                session: session
-            )
-        } catch {
-            let again = try await portal.fetchDevices(for: team, types: .all, session: session)
-            if let existing = again.first(where: { $0.identifier.caseInsensitiveCompare(udid) == .orderedSame }) {
+            let devices = try await portal.fetchDevices(for: team, types: .all, session: session)
+            if let existing = devices.first(where: { $0.identifier.caseInsensitiveCompare(udid) == .orderedSame }) {
                 return existing
             }
+            return try await portal.registerDevice(
+                name: UIDevice.current.name, identifier: udid, type: .iPhone,
+                team: team, session: session
+            )
+        } catch {
             throw mapSessionError(error)
         }
     }
@@ -173,93 +168,73 @@ final class IPASigningService: ObservableObject {
         do {
             let existing = try await portal.fetchAppIDs(for: team, session: session)
             if let found = existing.first(where: { $0.bundleIdentifier == bundleID }) { return found }
-            let safeName = String(name.prefix(30))
-            return try await portal.addAppID(withName: safeName, bundleIdentifier: bundleID, team: team, session: session)
+            return try await portal.addAppID(
+                withName: String(name.prefix(30)), bundleIdentifier: bundleID, team: team, session: session
+            )
         } catch {
             throw mapSessionError(error)
         }
     }
 
     private func ensureProfile(
-        appID: AppID,
-        keyStore: KeyStore,
-        device: Device,
-        team: Team,
-        session: Session
+        appID: AppID, certificateID: String, certificateSerial: String,
+        device: Device, team: Team, session: Session
     ) async throws -> ProvisioningProfile {
+        func matches(_ profile: ProvisioningProfile) -> Bool {
+            SideloadValidation.profileMatches(
+                bundleID: appID.bundleIdentifier, teamID: team.identifier,
+                udid: deviceUDID, certificateSerial: certificateSerial,
+                profileBundleID: profile.bundleIdentifier, profileTeamID: profile.teamIdentifier,
+                profileDevices: profile.deviceIDs,
+                profileCertificateSerials: profile.certificates.map(\.serialNumber),
+                expiration: profile.expirationDate
+            )
+        }
+
+        // Xcode team profiles may include all registered devices/certificates.
+        // Validate their actual contents before allowing the signer to use them.
+        let downloaded: ProvisioningProfile?
         do {
-            return try await portal.downloadProvisioningProfile(
-                for: appID,
-                isTeamProfile: true,
-                deviceType: .iPhone,
-                team: team,
-                session: session
+            downloaded = try await portal.downloadProvisioningProfile(
+                for: appID, isTeamProfile: true, deviceType: .iPhone, team: team, session: session
             )
         } catch {
-            let certID = keyStore.certificate.identifier
-                ?? UserDefaults.standard.string(forKey: Keys.certID)
-                ?? keyStore.certificate.serialNumber
-            let deviceID = device.deviceID ?? device.identifier
-            do {
-                return try await portal.createProvisioningProfile(
-                    name: "PurpleKit \(appID.bundleIdentifier)",
-                    appID: appID,
-                    certificateIDs: [certID],
-                    deviceIDs: [deviceID],
-                    team: team,
-                    session: session
-                )
-            } catch {
-                throw mapSessionError(error)
-            }
+            let mapped = mapSessionError(error)
+            if let signError = mapped as? SignError, signError == .sessionExpired { throw mapped }
+            downloaded = nil
+        }
+        if let downloaded, matches(downloaded) { return downloaded }
+
+        do {
+            let created = try await portal.createProvisioningProfile(
+                name: "PurpleKit \(appID.bundleIdentifier)",
+                appID: appID, certificateIDs: [certificateID],
+                deviceIDs: [device.deviceID ?? device.identifier], team: team, session: session
+            )
+            guard matches(created) else { throw SignError.invalidProfile }
+            return created
+        } catch {
+            throw mapSessionError(error)
         }
     }
 
-    private func readBundleID(appURL: URL) throws -> String {
-        let infoURL = appURL.appendingPathComponent("Info.plist")
-        guard let dict = NSDictionary(contentsOf: infoURL) as? [String: Any],
-              let bid = dict["CFBundleIdentifier"] as? String,
-              !bid.isEmpty else {
-            throw SignError.missingBundleID
-        }
-        return bid
-    }
-
-    private func makeWorkDir() throws -> URL {
-        let base = fm.temporaryDirectory.appendingPathComponent("PurpleKitSign-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: base, withIntermediateDirectories: true)
-        return base
-    }
-
-    private func signedDirectory() throws -> URL {
-        let docs = try fm.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let dir = docs.appendingPathComponent("SignedIPAs", isDirectory: true)
-        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-
-    enum SignError: LocalizedError {
-        case notSignedIn
-        case sessionExpired
-        case noCertificate
-        case noTeam
-        case missingUDID
-        case missingBundleID
+    enum SignError: LocalizedError, Equatable {
+        case busy, notSignedIn, sessionExpired, noCertificate, certificateExpired
+        case noTeam, selectTeam, certificateTeamMismatch, missingUDID, missingBundleID, invalidProfile
 
         var errorDescription: String? {
             switch self {
-            case .notSignedIn:
-                return "Войди в Apple ID (Настройки)."
-            case .sessionExpired:
-                return "Сессия истекла (1100). Зайди в Apple ID заново в Настройках."
-            case .noCertificate:
-                return "Нет development certificate. Зайди в Apple ID — сертификат запросится сам."
-            case .noTeam:
-                return "Нет developer team на этом Apple ID."
-            case .missingUDID:
-                return "Нужен настоящий UDID устройства (не UUID). Вставь из Finder/Xcode или получи через pairing + minimuxer."
-            case .missingBundleID:
-                return "Не прочитан CFBundleIdentifier."
+            case .busy: return "Другая операция подписи уже выполняется."
+            case .notSignedIn: return "Подключи Apple ID в настройках."
+            case .sessionExpired: return "Сессия Apple ID истекла. Войди заново в настройках."
+            case .noCertificate: return "Нет сертификата разработки. Запроси его в настройках Apple ID."
+            case .certificateExpired: return "Сертификат истёк. Запроси новый в настройках Apple ID."
+            case .noTeam: return "У Apple ID нет доступной команды разработчика."
+            case .selectTeam: return "Выбери доступную команду в настройках Apple ID."
+            case .certificateTeamMismatch: return "Сертификат не найден в выбранной команде Apple или отозван. Запроси сертификат для этой команды."
+            case .missingUDID: return "Нужен настоящий UDID. Импортируй pairing и включи локальный VPN либо введи UDID в настройках."
+            case .missingBundleID: return "Не удалось прочитать приложение внутри IPA."
+            case .invalidProfile: return "Профиль не подходит для этого приложения, устройства или сертификата."
             }
         }
     }

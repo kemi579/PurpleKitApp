@@ -15,7 +15,9 @@ final class SideSignAppleAccountProvider: ObservableObject {
     @Published private(set) var status = "Not signed in"
     @Published private(set) var account: Account?
     @Published private(set) var teams: [Team] = []
-    @Published var selectedTeamID = ""
+    @Published var selectedTeamID = "" {
+        didSet { UserDefaults.standard.set(selectedTeamID, forKey: "PurpleKit.selectedTeamID") }
+    }
     @Published private(set) var hasCertificate = false
     @Published private(set) var certificateName = ""
     @Published private(set) var certificateExpires: Date?
@@ -36,6 +38,7 @@ final class SideSignAppleAccountProvider: ObservableObject {
     private static let selectedServerKey = "PurpleKit.selectedAnisetteServer"
 
     init() {
+        selectedTeamID = UserDefaults.standard.string(forKey: "PurpleKit.selectedTeamID") ?? ""
         appleID = (try? KeychainVault.load(account: "apple-id-email")).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         selectedServerAddress = UserDefaults.standard.string(forKey: Self.selectedServerKey) ?? ""
         if (try? KeychainVault.load(account: "sidesign-development-certificate-p12")) != nil {
@@ -276,7 +279,9 @@ final class SideSignAppleAccountProvider: ObservableObject {
         guard let authSession else { return }
         do {
             teams = try await portal.fetchTeams(for: authSession.account, session: authSession.session)
-            if selectedTeamID.isEmpty { selectedTeamID = teams.first?.identifier ?? "" }
+            if !teams.contains(where: { $0.identifier == selectedTeamID }) {
+                selectedTeamID = teams.first?.identifier ?? ""
+            }
             let teamLabel = teams.first(where: { $0.identifier == selectedTeamID })?.name
             CertificateStore.shared.applyAuthenticatedSession(email: authSession.account.appleID, team: teamLabel)
             status = "Signed in as \(authSession.account.appleID). \(teams.count) team(s)."
@@ -286,6 +291,10 @@ final class SideSignAppleAccountProvider: ObservableObject {
     }
 
     func createDevelopmentCertificate() async {
+        guard !DeviceInstaller.shared.isWorking && !IPASigningService.shared.isWorking else {
+            status = "Дождись завершения подписи или установки."
+            return
+        }
         guard let authSession, let team = teams.first(where: { $0.identifier == selectedTeamID }) ?? teams.first else {
             status = "Сначала войди — team не загружен."
             return

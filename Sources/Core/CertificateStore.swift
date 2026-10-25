@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import SideSign
 
 @MainActor
 final class CertificateStore: ObservableObject {
@@ -25,13 +26,20 @@ final class CertificateStore: ObservableObject {
 
     private init() {
         appleID = UserDefaults.standard.string(forKey: Keys.appleID) ?? ""
-        // Do not restore fake "logged in" state from older builds.
-        // Real session is restored by SideSignAppleAccountProvider from Keychain.
-        isLoggedIn = false
-        certName = ""
-        certExpires = nil
-        lastRefresh = nil
-        teamName = ""
+        if let sessionData = try? KeychainVault.load(account: "sidesign-auth-session"),
+           let session = try? JSONDecoder().decode(AuthSession.self, from: sessionData),
+           session.session.isValid {
+            appleID = session.account.appleID
+            isLoggedIn = true
+            teamName = UserDefaults.standard.string(forKey: Keys.teamName) ?? ""
+            if let p12 = try? KeychainVault.load(account: "sidesign-development-certificate-p12"),
+               let passwordData = try? KeychainVault.load(account: "sidesign-development-certificate-password"),
+               let password = String(data: passwordData, encoding: .utf8),
+               let keys = try? KeyStore(p12Data: p12, password: password) {
+                certName = keys.certificate.name
+                certExpires = keys.certificate.expiryDate
+            }
+        }
     }
 
     var daysLeft: Int? {

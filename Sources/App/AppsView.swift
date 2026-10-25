@@ -28,9 +28,10 @@ struct LibraryView: View {
     @State private var path = NavigationPath()
     @State private var exportFile: LibraryIPA?
     @State private var pendingDeletion: LibraryIPA?
+    @State private var isLoading = false
 
     private var isBusy: Bool {
-        busyID != nil || signer.isWorking || installer.isWorking
+        isLoading || busyID != nil || signer.isWorking || installer.isWorking
     }
 
     private var filteredList: [LibraryIPA] {
@@ -265,7 +266,12 @@ struct LibraryView: View {
                 .accessibilityLabel("Сортировка приложений")
             }
 
-            if isBusy {
+            if isLoading {
+                ProgressView("Чтение библиотеки…")
+                    .tint(Theme.primaryLight)
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            } else if isBusy {
                 LibraryNotice(
                     title: "Выполняется операция",
                     message: signer.progressText.isEmpty ? installer.status : signer.progressText,
@@ -281,7 +287,7 @@ struct LibraryView: View {
                 LibraryNotice(title: "Готово", message: statusMessage, icon: "checkmark.circle", color: Theme.success)
             }
 
-            if filteredList.isEmpty {
+            if filteredList.isEmpty && !isLoading {
                 emptyState
             } else {
                 LazyVStack(spacing: 12) {
@@ -358,7 +364,7 @@ struct LibraryView: View {
                 }
                 .disabled(isBusy)
                 Button { Task { await install(file) } } label: {
-                    Label("Подписать и установить", systemImage: "arrow.down.app")
+                    Label(segment == .signed ? "Установить IPA" : "Подписать и установить", systemImage: "arrow.down.app")
                 }
                 .disabled(isBusy)
                 Button { exportFile = file } label: {
@@ -384,8 +390,16 @@ struct LibraryView: View {
     }
 
     private func reload() {
-        importedFiles = LibraryIPALoader.load(in: "ImportedIPAs")
-        signedFiles = LibraryIPALoader.load(in: "SignedIPAs")
+        guard !isLoading else { return }
+        isLoading = true
+        Task {
+            let snapshot = await Task.detached(priority: .userInitiated) {
+                (LibraryIPALoader.load(in: "ImportedIPAs"), LibraryIPALoader.load(in: "SignedIPAs"))
+            }.value
+            importedFiles = snapshot.0
+            signedFiles = snapshot.1
+            isLoading = false
+        }
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {
@@ -458,7 +472,12 @@ struct LibraryView: View {
         statusMessage = nil
         defer { busyID = nil }
         do {
-            try await installer.signAndInstall(ipaURL: file.url)
+            if signedFiles.contains(where: { $0.id == file.id }) {
+                guard let bundleID = file.bundleID else { throw DeviceInstaller.InstallError.missingBundleID }
+                try await installer.installSigned(ipaURL: file.url, bundleID: bundleID)
+            } else {
+                try await installer.signAndInstall(ipaURL: file.url)
+            }
             statusMessage = installer.status
             reload()
             Haptic.success()
@@ -502,7 +521,7 @@ enum LibraryIPALoader {
     }
 }
 
-struct LibraryIPA: Identifiable, Hashable {
+struct LibraryIPA: Identifiable, Hashable, Sendable {
     let url: URL
     let size: Int64
     let displayName: String
@@ -675,7 +694,7 @@ struct AppDetailView: View {
 
                 VStack(spacing: 12) {
                     Button(action: onSignAndInstall) {
-                        Label(busy ? "Выполняется операция…" : "Подписать и установить",
+                        Label(busy ? "Выполняется операция…" : (isSigned ? "Установить IPA" : "Подписать и установить"),
                               systemImage: busy ? "hourglass" : "arrow.down.app")
                             .font(.headline)
                             .frame(maxWidth: .infinity, minHeight: 54)
