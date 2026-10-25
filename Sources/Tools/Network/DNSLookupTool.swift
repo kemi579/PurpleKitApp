@@ -18,61 +18,65 @@ struct DNSLookupView: View {
     @State private var error: String?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                PurpleTextField(placeholder: "Hostname (e.g. google.com)", text: $host)
-
-                PurpleButton(title: "Lookup", icon: "magnifyingglass") {
-                    lookup()
-                }
-
-                if loading {
-                    ProgressView().tint(Theme.primaryLight)
-                }
-
-                if let error {
-                    Text(error).font(.caption).foregroundColor(Theme.error)
-                }
-
-                ForEach(results, id: \.self) { r in
-                    ResultBox(title: "Address", value: r) {}
-                }
-            }
-            .padding()
+        ToolLayout(primaryTitle: loading ? "Поиск…" : "Найти адреса", isBusy: loading, primaryAction: lookup) {
+            SettingsGroup { InputField(placeholder: "Имя хоста", text: $host) }
+            if loading { ProgressView("Поиск адресов…") }
+            if let error { Text(error).font(.subheadline).foregroundStyle(Theme.error) }
+            ForEach(results, id: \.self) { result in ResultGroup(title: "Адрес", value: result) }
         }
     }
 
     private func lookup() {
-        let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !h.isEmpty else { return }
+        let hostname = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !hostname.isEmpty else { return }
         loading = true
         error = nil
         results = []
-        DispatchQueue.global().async {
-            var hints = addrinfo(ai_flags: AI_PASSIVE, ai_family: AF_UNSPEC, ai_socktype: SOCK_STREAM, ai_protocol: 0, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
-            var res: UnsafeMutablePointer<addrinfo>?
-            let status = getaddrinfo(h, nil, &hints, &res)
-            defer { freeaddrinfo(res) }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var hints = addrinfo(
+                ai_flags: AI_PASSIVE,
+                ai_family: AF_UNSPEC,
+                ai_socktype: SOCK_STREAM,
+                ai_protocol: 0,
+                ai_addrlen: 0,
+                ai_canonname: nil,
+                ai_addr: nil,
+                ai_next: nil
+            )
+            var resultPointer: UnsafeMutablePointer<addrinfo>?
+            let status = getaddrinfo(hostname, nil, &hints, &resultPointer)
+
+            var addresses: [String] = []
+            if status == 0, let first = resultPointer {
+                var current: UnsafeMutablePointer<addrinfo>? = first
+                while let entry = current {
+                    var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(
+                        entry.pointee.ai_addr,
+                        entry.pointee.ai_addrlen,
+                        &buffer,
+                        socklen_t(buffer.count),
+                        nil,
+                        0,
+                        NI_NUMERICHOST
+                    ) == 0 {
+                        let length = buffer.firstIndex(of: 0) ?? buffer.endIndex
+                        let bytes = buffer[..<length].map { UInt8(bitPattern: $0) }
+                        addresses.append(String(decoding: bytes, as: UTF8.self))
+                    }
+                    current = entry.pointee.ai_next
+                }
+            }
+            freeaddrinfo(resultPointer)
+
+            let uniqueAddresses = Array(Set(addresses)).sorted()
             DispatchQueue.main.async {
-                if status == 0, let res = res {
-                    var list: [String] = []
-                    var ptr: UnsafeMutablePointer<addrinfo>? = res
-                    while let p = ptr {
-                        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                        if getnameinfo(p.pointee.ai_addr, p.pointee.ai_addrlen, &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST) == 0 {
-                            list.append(String(cString: hostname))
-                        }
-                        ptr = p.pointee.ai_next
-                    }
-                    if !list.isEmpty {
-                        results = Array(Set(list)).sorted()
-                        Haptic.success()
-                    } else {
-                        error = "No addresses"
-                        Haptic.error()
-                    }
+                if status == 0, !uniqueAddresses.isEmpty {
+                    results = uniqueAddresses
+                    Haptic.success()
                 } else {
-                    error = "Lookup failed"
+                    error = status == 0 ? "No addresses" : "Lookup failed"
                     Haptic.error()
                 }
                 loading = false

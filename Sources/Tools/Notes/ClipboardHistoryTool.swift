@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 struct ClipboardHistoryTool: Tool {
     let id = "clipboard"
     let name = "Clipboard History"
@@ -10,6 +11,7 @@ struct ClipboardHistoryTool: Tool {
     var content: AnyView { AnyView(ClipboardHistoryView()) }
 }
 
+@MainActor
 struct ClipboardHistoryView: View {
     @State private var items: [ClipItem] = []
     @State private var timer: Timer?
@@ -18,69 +20,58 @@ struct ClipboardHistoryView: View {
     private let maxItems = 50
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("History (local only)")
-                    .font(.subheadline)
-                    .foregroundColor(Theme.textSecondary)
-                Spacer()
-                Button("Clear All") {
-                    items = []
-                    save()
-                    Haptic.light()
-                }
-                .font(.caption)
-                .foregroundColor(Theme.error)
-            }
-            .padding()
-
+        ToolLayout {
             if items.isEmpty {
-                EmptyStateView(icon: "doc.on.clipboard", title: "Empty", message: "Copy something to start history.")
+                EmptyStateView(title: "История пуста", message: "Здесь сохраняется текст буфера обмена, пока открыт этот экран.")
             } else {
-                List {
+                SettingsGroup {
                     ForEach(items) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.text)
-                                .foregroundColor(Theme.textPrimary)
-                                .lineLimit(3)
-                            Text(item.date, style: .relative)
-                                .font(.caption)
-                                .foregroundColor(Theme.textSecondary)
-                        }
-                        .listRowBackground(Theme.surfaceElevated)
-                        .onTapGesture {
+                        Button {
                             UIPasteboard.general.string = item.text
                             Haptic.success()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(item.text).font(.body).foregroundStyle(Theme.primaryText)
+                                    .multilineTextAlignment(.leading)
+                                Text(item.date, style: .relative).font(.caption).foregroundStyle(Theme.secondaryText)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .padding(Theme.rowInset)
+                            .contentShape(Rectangle())
                         }
-                        .swipeActions {
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Копирует текст в буфер обмена")
+                        .contextMenu {
                             Button(role: .destructive) {
                                 items.removeAll { $0.id == item.id }
                                 save()
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                            } label: { Label("Удалить", systemImage: "trash") }
                         }
+                        if item.id != items.last?.id { SettingsDivider() }
                     }
                 }
-                .scrollContentBackground(.hidden)
-                .listStyle(.plain)
             }
         }
-        .onAppear {
-            load()
-            startMonitoring()
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                IconAction(title: "Очистить историю", icon: "trash") {
+                    items = []; save(); Haptic.light()
+                }
+            }
         }
-        .onDisappear {
-            timer?.invalidate()
-        }
+        .onAppear { load(); startMonitoring() }
+        .onDisappear { timer?.invalidate(); timer = nil }
     }
 
     private func startMonitoring() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
-            checkClipboard()
+            Task { @MainActor in
+                checkClipboard()
+            }
         }
     }
 
+    @MainActor
     private func checkClipboard() {
         guard let str = UIPasteboard.general.string, !str.isEmpty else { return }
         if items.first?.text == str { return }

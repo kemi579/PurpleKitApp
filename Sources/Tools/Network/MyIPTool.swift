@@ -16,29 +16,12 @@ struct MyIPView: View {
     @State private var error: String?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                if loading {
-                    ProgressView()
-                        .tint(Theme.primaryLight)
-                        .padding()
-                }
-
-                ResultBox(title: "Public IP", value: ip) {}
-
-                if let error {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundColor(Theme.error)
-                }
-
-                PurpleButton(title: "Refresh", icon: "arrow.clockwise") {
-                    fetch()
-                }
-            }
-            .padding()
-            .onAppear { fetch() }
+        ToolLayout(primaryTitle: loading ? "Обновление…" : "Обновить", isBusy: loading, primaryAction: fetch) {
+            if loading { ProgressView("Получение IP…") }
+            ResultGroup(title: "Публичный IP", value: ip)
+            if let error { Text(error).font(.subheadline).foregroundStyle(Theme.error) }
         }
+        .onAppear { fetch() }
     }
 
     private func fetch() {

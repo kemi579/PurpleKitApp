@@ -17,43 +17,42 @@ struct NotesView: View {
     private let key = "PurpleKit.notes"
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                PurpleTextField(placeholder: "New note…", text: $newText)
-                Button {
-                    add()
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(Theme.primaryGradient)
-                }
-            }
-            .padding()
-
+        ToolLayout(primaryTitle: "Добавить заметку", primaryAction: add) {
+            SettingsGroup { InputField(placeholder: "Новая заметка", text: $newText, isMultiline: true) }
             if notes.isEmpty {
-                EmptyStateView(icon: "note.text", title: "No notes", message: "Add your first quick note.")
+                EmptyStateView(title: "Нет заметок", message: "Добавь первую заметку.")
             } else {
-                List {
+                SettingsGroup {
                     ForEach(notes) { note in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(note.text)
-                                .foregroundColor(Theme.textPrimary)
-                            Text(note.date, style: .relative)
-                                .font(.caption)
-                                .foregroundColor(Theme.textSecondary)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(note.text).font(.body).foregroundStyle(Theme.primaryText)
+                                .textSelection(.enabled)
+                            Text(note.date, style: .relative).font(.caption).foregroundStyle(Theme.secondaryText)
                         }
-                        .listRowBackground(Theme.surfaceElevated)
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                delete(note)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Theme.rowInset)
+                        .accessibilityElement(children: .combine)
+                        .contextMenu {
+                            Button { UIPasteboard.general.string = note.text } label: {
+                                Label("Копировать", systemImage: "doc.on.doc")
+                            }
+                            Button(role: .destructive) { delete(note) } label: {
+                                Label("Удалить", systemImage: "trash")
                             }
                         }
+                        if note.id != notes.last?.id { SettingsDivider() }
                     }
                 }
-                .scrollContentBackground(.hidden)
-                .listStyle(.plain)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink {
+                    ClipboardHistoryView().navigationTitle("Буфер обмена")
+                } label: {
+                    Image(systemName: "doc.on.clipboard").frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel("История буфера обмена")
             }
         }
         .onAppear { load() }

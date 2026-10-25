@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 final class ToolRegistry: ObservableObject {
     static let shared = ToolRegistry()
 
@@ -31,7 +32,6 @@ final class ToolRegistry: ObservableObject {
             RandomNumberTool(),
             // QR
             QRGeneratorTool(),
-            QRScannerTool(),
             // Converter
             UnitConverterTool(),
             // Network

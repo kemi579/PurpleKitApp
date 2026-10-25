@@ -1,152 +1,131 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
-    @EnvironmentObject var certs: CertificateStore
-    @State private var email = ""
+    @EnvironmentObject private var certs: CertificateStore
+    @ObservedObject private var signer = IPASigningService.shared
+    @ObservedObject private var installer = DeviceInstaller.shared
+    @State private var showSignIn = false
     @State private var showLogout = false
+    @State private var showLibrary = false
+    @State private var showPairingImporter = false
+    @State private var pairingError: String?
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        Text("Settings")
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundStyle(Theme.primaryGradient)
-                            .padding(.top, 8)
-
-                        // Apple ID card
-                        VStack(alignment: .leading, spacing: 16) {
-                            HStack {
-                                Image(systemName: "apple.logo")
-                                    .font(.title2)
-                                    .foregroundColor(Theme.textPrimary)
-                                Text("Apple ID")
-                                    .font(.headline)
-                                    .foregroundColor(Theme.textPrimary)
-                                Spacer()
-                                if certs.isLoggedIn {
-                                    Text("Connected")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundColor(Theme.success)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(Theme.success.opacity(0.15))
-                                        .clipShape(Capsule())
-                                }
-                            }
-
-                            if certs.isLoggedIn {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    row("Account", certs.appleID)
-                                    row("Certificate", certs.certName.isEmpty ? "—" : certs.certName)
-                                    if let exp = certs.certExpires {
-                                        row("Expires", exp.formatted(date: .abbreviated, time: .omitted))
-                                    }
-                                    row("Status", certs.certStatusText)
-                                }
-
-                                PurpleButton(title: "Refresh certificate", icon: "arrow.clockwise") {
-                                    certs.refreshCert()
-                                }
-
-                                PurpleButton(title: "Disconnect", icon: "rectangle.portrait.and.arrow.right", style: .secondary) {
-                                    showLogout = true
-                                }
-                            } else {
-                                Text("Sign in with a free Apple ID. Certificate lasts ~7 days — refresh from here or via AltStore/SideStore.")
-                                    .font(.subheadline)
-                                    .foregroundColor(Theme.textSecondary)
-
-                                PurpleTextField(placeholder: "Apple ID (email)", text: $email)
-                                    .textInputAutocapitalization(.never)
-                                    .keyboardType(.emailAddress)
-
-                                PurpleButton(title: "Connect", icon: "link") {
-                                    certs.login(email: email.isEmpty ? certs.appleID : email)
-                                    email = ""
-                                }
-
-                                if !certs.appleID.isEmpty {
-                                    Button {
-                                        email = certs.appleID
-                                    } label: {
-                                        Text("Use saved: \(certs.appleID)")
-                                            .font(.caption)
-                                            .foregroundColor(Theme.primaryLight)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(16)
-                        .background(Theme.cardGradient)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                        )
-
-                        // About sideload
-                        VStack(alignment: .leading, spacing: 12) {
-                            SectionHeader(title: "Sideloading", icon: "shippingbox.fill", color: Theme.neon)
-
-                            infoLine(icon: "info.circle", text: "Free Apple ID = 7-day certificate, max 3 apps, 10 app IDs.")
-                            infoLine(icon: "arrow.triangle.2.circlepath", text: "Refresh before expiry or apps stop launching.")
-                            infoLine(icon: "lock.shield", text: "Password is never stored in PurpleKit. Sign only in AltStore / SideStore / Sideloadly.")
-                        }
-
-                        // App info
-                        VStack(alignment: .leading, spacing: 12) {
-                            SectionHeader(title: "About", icon: "info.circle", color: Theme.textSecondary)
-
-                            row("Version", "1.0.0")
-                            row("Bundle", "com.kemi579.PurpleKit")
-                            row("Min iOS", "16.0")
-                        }
-                        .padding(16)
-                        .background(Theme.surfaceElevated)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            ToolLayout {
+                SectionHeading(title: "Приложения")
+                SettingsGroup {
+                    Button { showLibrary = true } label: {
+                        SettingsRow(title: "Библиотека IPA", icon: "square.stack.3d.up")
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 32)
+                    .buttonStyle(.plain)
+                }
+
+                SectionHeading(title: "Подписание")
+                SettingsGroup {
+                    Button { showSignIn = true } label: {
+                        SettingsRow(title: "Apple ID", value: certs.appleID.isEmpty ? "Не подключён" : certs.appleID,
+                                    icon: "person.crop.circle")
+                    }
+                    .buttonStyle(.plain)
+                    SettingsDivider(leading: 56)
+                    SettingsRow(title: "Сертификат", value: certs.certName.isEmpty ? "Не выдан" : certs.certName,
+                                showsChevron: false)
+                    if let expiry = certs.certExpires {
+                        SettingsDivider()
+                        SettingsRow(title: "Срок действия", value: expiry.formatted(date: .abbreviated, time: .omitted),
+                                    showsChevron: false)
+                    }
+                    StatusBadges {
+                        PillBadge(text: certs.isCertHealthy ? "Valid" : certs.certStatusText,
+                                  color: certs.isCertHealthy ? Theme.success : Theme.error)
+                        if let days = certs.daysLeft {
+                            PillBadge(text: "\(days) дней", color: days <= 2 ? Theme.error : Theme.secondaryText)
+                        }
+                    }
+                }
+                if certs.isLoggedIn {
+                    Button("Отключить Apple ID", role: .destructive) { showLogout = true }
+                        .frame(minHeight: 44)
+                }
+
+                SectionHeading(title: "Подключение")
+                SettingsGroup {
+                    Button { showPairingImporter = true } label: {
+                        SettingsRow(title: "Pairing-файл", value: installer.hasPairingFile ? "Импортирован" : "Добавить",
+                                    icon: "link")
+                    }
+                    .buttonStyle(.plain)
+                    SettingsDivider(leading: 56)
+                    NavigationLink { AnisetteServerSettingsView() } label: {
+                        SettingsRow(title: "Серверы Anisette", icon: "server.rack")
+                    }
+                    .buttonStyle(.plain)
+                    SettingsDivider()
+                    InputField(placeholder: "UDID устройства", text: $signer.deviceUDID)
+                }
+                Text("Pairing-файл нужно один раз получить на компьютере. Для установки включи совместимый локальный VPN.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.secondaryText)
+                if let pairingError {
+                    Text(pairingError).font(.subheadline).foregroundStyle(Theme.error)
+                }
+
+                SectionHeading(title: "О приложении")
+                SettingsGroup {
+                    SettingsRow(title: "Версия", value: "1.0.0", showsChevron: false)
+                    SettingsDivider()
+                    SettingsRow(title: "Bundle ID", value: "com.kemi579.PurpleKit", showsChevron: false)
+                    SettingsDivider()
+                    SettingsRow(title: "Минимальная iOS", value: "16.0", showsChevron: false)
+                    SettingsDivider()
+                    SettingsRow(title: "Оформление", value: "Тёмное", showsChevron: false)
+                }
+                Text("Подпись: SideSign. Установка: Minimuxer. Сведения о лицензиях доступны в репозитории.")
+                    .font(.footnote).foregroundStyle(Theme.secondaryText)
+            }
+            .navigationTitle("Настройки")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if installer.hasPairingFile {
+                        Menu {
+                            Button(role: .destructive) { try? installer.clearPairingFile() } label: {
+                                Label("Удалить pairing-файл", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44)
+                        }
+                        .accessibilityLabel("Действия с подключением")
+                    }
                 }
             }
-            .navigationBarHidden(true)
-            .onAppear {
-                if email.isEmpty { email = certs.appleID }
+            .sheet(isPresented: $showLibrary) {
+                LibraryView(onOpenSettings: { showLibrary = false })
             }
-            .confirmationDialog("Disconnect Apple ID?", isPresented: $showLogout, titleVisibility: .visible) {
-                Button("Disconnect", role: .destructive) {
+            .sheet(isPresented: $showSignIn) { AppleDeveloperPortalSignInView() }
+            .fileImporter(isPresented: $showPairingImporter, allowedContentTypes: [.data, .item],
+                          allowsMultipleSelection: false) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    do {
+                        try installer.importPairingFile(from: url)
+                        pairingError = nil
+                    } catch { pairingError = error.localizedDescription }
+                case .failure(let error): pairingError = error.localizedDescription
+                }
+            }
+            .confirmationDialog("Отключить Apple ID?", isPresented: $showLogout, titleVisibility: .visible) {
+                Button("Отключить", role: .destructive) {
                     certs.logout()
+                    try? KeychainVault.delete(account: "sidesign-auth-session")
+                    try? KeychainVault.delete(account: "sidesign-development-certificate-p12")
+                    try? KeychainVault.delete(account: "sidesign-development-certificate-password")
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Отмена", role: .cancel) {}
             }
-        }
-    }
-
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title)
-                .foregroundColor(Theme.textSecondary)
-                .font(.subheadline)
-            Spacer()
-            Text(value)
-                .foregroundColor(Theme.textPrimary)
-                .font(.system(size: 14, design: .monospaced))
-                .lineLimit(1)
-        }
-    }
-
-    private func infoLine(icon: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .foregroundColor(Theme.primaryLight)
-                .frame(width: 20)
-            Text(text)
-                .font(.subheadline)
-                .foregroundColor(Theme.textSecondary)
         }
     }
 }

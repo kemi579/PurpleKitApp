@@ -17,30 +17,13 @@ struct HTTPStatusView: View {
     @State private var headers: [String] = []
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                PurpleTextField(placeholder: "https://example.com", text: $urlString)
-
-                PurpleButton(title: "Check", icon: "arrow.up.right") {
-                    check()
-                }
-
-                if loading {
-                    ProgressView().tint(Theme.primaryLight)
-                }
-
-                if !status.isEmpty {
-                    ResultBox(title: "Status", value: status) {}
-                }
-
-                ForEach(headers, id: \.self) { h in
-                    Text(h)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(Theme.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+        ToolLayout(primaryTitle: loading ? "Проверка…" : "Проверить", isBusy: loading, primaryAction: check) {
+            SettingsGroup { InputField(placeholder: "URL", text: $urlString) }
+            if loading { ProgressView("Получение ответа…") }
+            if !status.isEmpty { ResultGroup(title: "Статус", value: status) }
+            if !headers.isEmpty {
+                ResultGroup(title: "Заголовки ответа", value: headers.joined(separator: "\n"))
             }
-            .padding()
         }
     }
 

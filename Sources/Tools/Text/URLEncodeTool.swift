@@ -16,31 +16,25 @@ struct URLEncodeView: View {
     @State private var mode = 0
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Picker("Mode", selection: $mode) {
+        ToolLayout {
+            SettingsGroup {
+                Picker("Режим", selection: $mode) {
                     Text("Encode").tag(0)
                     Text("Decode").tag(1)
                 }
                 .pickerStyle(.segmented)
+                .padding(Theme.rowInset)
                 .onChange(of: mode) { _ in process() }
-
-                PurpleTextField(placeholder: "Input…", text: $input, isMultiline: true)
+                SettingsDivider()
+                InputField(placeholder: "Текст или URL", text: $input, isMultiline: true)
                     .onChange(of: input) { _ in process() }
-
-                ResultBox(title: "Result", value: output) {}
-
-                HStack(spacing: 12) {
-                    PurpleButton(title: "Copy", icon: "doc.on.doc") {
-                        UIPasteboard.general.string = output
-                        Haptic.success()
-                    }
-                    PurpleButton(title: "Clear", icon: "trash", style: .secondary) {
-                        input = ""; output = ""
-                    }
-                }
             }
-            .padding()
+            ResultGroup(title: "Результат", value: output)
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                IconAction(title: "Очистить", icon: "trash") { input = ""; output = "" }
+            }
         }
     }
 

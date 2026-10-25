@@ -18,29 +18,21 @@ struct RandomNumberView: View {
     @State private var results: [String] = []
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                HStack {
-                    PurpleTextField(placeholder: "Min", text: $minVal)
-                    PurpleTextField(placeholder: "Max", text: $maxVal)
+        ToolLayout(primaryTitle: "Сгенерировать", primaryAction: generate) {
+            SettingsGroup {
+                InputField(placeholder: "Минимум", text: $minVal)
+                SettingsDivider()
+                InputField(placeholder: "Максимум", text: $maxVal)
+                SettingsDivider()
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Количество: \(Int(count))").font(.body)
+                    Slider(value: $count, in: 1...50, step: 1).accessibilityLabel("Количество чисел")
                 }
-
-                VStack(alignment: .leading) {
-                    Text("Count: \(Int(count))")
-                        .foregroundColor(Theme.textSecondary)
-                    Slider(value: $count, in: 1...50, step: 1)
-                        .tint(Theme.primaryLight)
-                }
-
-                PurpleButton(title: "Generate", icon: "dice") {
-                    generate()
-                }
-
-                ForEach(results, id: \.self) { r in
-                    ResultBox(title: "Result", value: r) {}
-                }
+                .padding(Theme.rowInset)
             }
-            .padding()
+            if !results.isEmpty {
+                ResultGroup(title: "Результаты", value: results.joined(separator: "\n"))
+            }
         }
     }
 

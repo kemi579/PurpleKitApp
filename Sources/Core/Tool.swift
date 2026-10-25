@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Tool metadata and its SwiftUI content are consumed by the app interface,
+/// so the protocol explicitly guarantees main-actor access under Swift 6.
+@MainActor
 protocol Tool: Identifiable {
     var id: String { get }
     var name: String { get }
@@ -42,19 +45,8 @@ enum ToolCategory: String, CaseIterable, Identifiable {
         }
     }
 
-    var color: Color {
-        switch self {
-        case .text: return Color(hex: "A78BFA")
-        case .hash: return Color(hex: "C084FC")
-        case .generator: return Color(hex: "E879F9")
-        case .qr: return Color(hex: "F0ABFC")
-        case .converter: return Color(hex: "818CF8")
-        case .network: return Color(hex: "67E8F9")
-        case .device: return Color(hex: "34D399")
-        case .notes: return Color(hex: "FBBF24")
-        case .future: return Color(hex: "94A3B8")
-        }
-    }
+    var color: Color { Theme.secondaryText }
+
 }
 
 struct AnyTool: Identifiable {
@@ -63,8 +55,9 @@ struct AnyTool: Identifiable {
     let icon: String
     let category: ToolCategory
     let description: String
-    let viewBuilder: () -> AnyView
+    let viewBuilder: @MainActor () -> AnyView
 
+    @MainActor
     init<T: Tool>(_ tool: T) {
         self.id = tool.id
         self.name = tool.name
@@ -74,6 +67,7 @@ struct AnyTool: Identifiable {
         self.viewBuilder = { tool.content }
     }
 
+    @MainActor
     var content: AnyView {
         viewBuilder()
     }

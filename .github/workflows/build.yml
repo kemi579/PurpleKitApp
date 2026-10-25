@@ -1,22 +1,59 @@
 name: Build IPA
 
 on:
-  push:
+  pull_request:
     branches: [main]
+  push:
+    branches: [main, "feat/**"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: purplekit-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Select latest available Xcode 16
+        run: |
+          set -euo pipefail
+          XCODE_PATH="$(find /Applications -maxdepth 1 -name 'Xcode_16*.app' -print | sort -V | tail -n 1)"
+          if [ -z "$XCODE_PATH" ]; then XCODE_PATH="/Applications/Xcode.app"; fi
+          sudo xcode-select -s "$XCODE_PATH"
+
+      - name: Show and verify toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          swift --version | grep -E 'Swift version 6\.'
+
+      - name: Test provisioning and UDID validation
+        run: swift test
+
+      - name: Clone minimuxer (local path package)
+        run: |
+          set -euo pipefail
+          # SPM cannot fetch minimuxer by URL because Package.swift depends on
+          # local path packages Common/ and DeviceGateway/. Clone the monorepo
+          # so those paths resolve.
+          mkdir -p Dependencies
+          if [ ! -d Dependencies/minimuxer/.git ]; then
+            git clone --depth 1 --branch develop \
+              https://github.com/SideStore/minimuxer.git Dependencies/minimuxer
+          fi
+          ls -la Dependencies/minimuxer
+          test -f Dependencies/minimuxer/Package.swift
+          test -d Dependencies/minimuxer/Common
+          test -d Dependencies/minimuxer/DeviceGateway
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -32,6 +69,7 @@ jobs:
             -configuration Release \
             -archivePath build/PurpleKit.xcarchive \
             -destination "generic/platform=iOS" \
+            -clonedSourcePackagesDirPath SourcePackages \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -41,10 +79,13 @@ jobs:
         run: |
           set -euo pipefail
           test -d build/PurpleKit.xcarchive/Products/Applications/PurpleKit.app
+          rm -rf Payload PurpleKit.ipa
           mkdir -p Payload
-          cp -r build/PurpleKit.xcarchive/Products/Applications/PurpleKit.app Payload/
-          zip -r PurpleKit.ipa Payload
-          ls -la PurpleKit.ipa
+          cp -R build/PurpleKit.xcarchive/Products/Applications/PurpleKit.app Payload/
+          /usr/bin/zip -qry PurpleKit.ipa Payload
+          test -s PurpleKit.ipa
+          unzip -l PurpleKit.ipa | grep -q 'Payload/PurpleKit.app/Info.plist'
+          ls -lh PurpleKit.ipa
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -54,13 +95,13 @@ jobs:
           retention-days: 30
 
       - name: Create Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         continue-on-error: true
-        if: github.ref == 'refs/heads/main'
         with:
           tag_name: latest
           name: Latest Build
-          body: "Unsigned IPA for AltStore / SideStore / Sideloadly. Install with your free Apple ID."
+          body: "Unsigned IPA for installation using a compatible sideloading tool. This artifact is not signed for direct installation."
           files: PurpleKit.ipa
           draft: false
           prerelease: false

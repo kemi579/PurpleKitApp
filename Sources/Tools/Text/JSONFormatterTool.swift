@@ -16,33 +16,26 @@ struct JSONFormatterView: View {
     @State private var error: String?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                PurpleTextField(placeholder: "Paste JSON…", text: $input, isMultiline: true)
-
-                HStack(spacing: 12) {
-                    PurpleButton(title: "Pretty", icon: "text.alignleft") {
-                        format(pretty: true)
-                    }
-                    PurpleButton(title: "Minify", icon: "text.justify", style: .secondary) {
-                        format(pretty: false)
-                    }
-                }
-
-                if let error {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundColor(Theme.error)
-                }
-
-                ResultBox(title: "Result", value: output) {}
-
-                PurpleButton(title: "Copy Result", icon: "doc.on.doc") {
-                    UIPasteboard.general.string = output
-                    Haptic.success()
-                }
+        ToolLayout(primaryTitle: "Форматировать", primaryAction: { format(pretty: true) }) {
+            SettingsGroup {
+                InputField(placeholder: "JSON", text: $input, isMultiline: true)
             }
-            .padding()
+            if let error { Text(error).font(.subheadline).foregroundStyle(Theme.error) }
+            ResultGroup(title: "Результат", value: output)
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button { format(pretty: false) } label: { Label("Сжать JSON", systemImage: "text.justify") }
+                    Button {
+                        UIPasteboard.general.string = output
+                        Haptic.success()
+                    } label: { Label("Копировать результат", systemImage: "doc.on.doc") }
+                } label: {
+                    Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel("Действия с JSON")
+            }
         }
     }
 

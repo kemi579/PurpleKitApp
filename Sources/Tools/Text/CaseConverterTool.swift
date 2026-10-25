@@ -39,26 +39,25 @@ struct CaseConverterView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                PurpleTextField(placeholder: "Input text…", text: $input, isMultiline: true)
-
-                Picker("Mode", selection: $selected) {
-                    ForEach(0..<modes.count, id: \.self) { i in
-                        Text(modes[i]).tag(i)
-                    }
+        ToolLayout {
+            SettingsGroup {
+                InputField(placeholder: "Исходный текст", text: $input, isMultiline: true)
+                SettingsDivider()
+                Picker("Регистр", selection: $selected) {
+                    ForEach(0..<modes.count, id: \.self) { i in Text(modes[i]).tag(i) }
                 }
-                .pickerStyle(.wheel)
-                .frame(height: 120)
-
-                ResultBox(title: "Result", value: result) {}
-
-                PurpleButton(title: "Copy", icon: "doc.on.doc") {
+                .pickerStyle(.menu)
+                .padding(Theme.rowInset)
+            }
+            ResultGroup(title: "Результат", value: result)
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                IconAction(title: "Копировать результат", icon: "doc.on.doc") {
                     UIPasteboard.general.string = result
                     Haptic.success()
                 }
             }
-            .padding()
         }
     }
 }

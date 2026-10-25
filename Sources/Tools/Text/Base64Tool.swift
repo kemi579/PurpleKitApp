@@ -19,39 +19,29 @@ struct Base64View: View {
     @State private var error: String?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Picker("Mode", selection: $mode) {
+        ToolLayout {
+            SettingsGroup {
+                Picker("Режим", selection: $mode) {
                     Text("Encode").tag(0)
                     Text("Decode").tag(1)
                 }
                 .pickerStyle(.segmented)
+                .padding(Theme.rowInset)
                 .onChange(of: mode) { _ in process() }
-
-                PurpleTextField(placeholder: mode == 0 ? "Text to encode…" : "Base64 to decode…", text: $input, isMultiline: true)
+                SettingsDivider()
+                InputField(placeholder: mode == 0 ? "Текст для кодирования" : "Base64 для декодирования",
+                           text: $input, isMultiline: true)
                     .onChange(of: input) { _ in process() }
-
-                if let error {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundColor(Theme.error)
-                }
-
-                ResultBox(title: "Result", value: output) {}
-
-                HStack(spacing: 12) {
-                    PurpleButton(title: "Copy", icon: "doc.on.doc") {
-                        UIPasteboard.general.string = output
-                        Haptic.success()
-                    }
-                    PurpleButton(title: "Clear", icon: "trash", style: .secondary) {
-                        input = ""
-                        output = ""
-                        error = nil
-                    }
+            }
+            if let error { Text(error).font(.subheadline).foregroundStyle(Theme.error) }
+            ResultGroup(title: "Результат", value: output)
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                IconAction(title: "Очистить", icon: "trash") {
+                    input = ""; output = ""; error = nil
                 }
             }
-            .padding()
         }
     }
 
