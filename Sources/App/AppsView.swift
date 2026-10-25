@@ -71,7 +71,9 @@ struct LibraryView: View {
                     busy: isBusy,
                     onSign: { Task { await sign(file) } },
                     onSignAndInstall: { Task { await install(file) } },
-                    onExport: { exportFile = file }
+                    onExport: { exportFile = file },
+                    statusMessage: statusMessage,
+                    errorMessage: errorMessage
                 )
             }
             .fileImporter(
@@ -635,12 +637,16 @@ private struct LibraryNotice: View {
 
 struct AppDetailView: View {
     @EnvironmentObject private var certs: CertificateStore
+    @ObservedObject private var installer = DeviceInstaller.shared
+    @ObservedObject private var signer = IPASigningService.shared
     let file: LibraryIPA
     let isSigned: Bool
     let busy: Bool
     let onSign: () -> Void
     let onSignAndInstall: () -> Void
     let onExport: () -> Void
+    var statusMessage: String? = nil
+    var errorMessage: String? = nil
 
     var body: some View {
         ScrollView {
@@ -691,6 +697,18 @@ struct AppDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
+
+                if busy {
+                    LibraryNotice(
+                        title: "Выполняется операция",
+                        message: signer.progressText.isEmpty ? installer.status : signer.progressText,
+                        icon: "hourglass", color: Theme.primaryLight, isProgress: true
+                    )
+                } else if let errorMessage {
+                    LibraryNotice(title: "Не получилось", message: errorMessage, icon: "exclamationmark.circle", color: Theme.error)
+                } else if let statusMessage {
+                    LibraryNotice(title: "Готово", message: statusMessage, icon: "checkmark.circle", color: Theme.success)
+                }
 
                 VStack(spacing: 12) {
                     Button(action: onSignAndInstall) {

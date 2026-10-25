@@ -44,25 +44,25 @@ final class CertificateStore: ObservableObject {
 
     var daysLeft: Int? {
         guard let exp = certExpires else { return nil }
-        return max(0, Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0)
+        return max(0, Int(ceil(exp.timeIntervalSinceNow / 86_400)))
     }
 
     var certStatusText: String {
         if !isLoggedIn {
-            return "Not signed in"
+            return "Apple ID не подключён"
         }
         if let days = daysLeft, !certName.isEmpty {
-            return days > 0 ? "Cert · \(days)d left" : "Cert expired"
+            return days > 0 ? "Сертификат · осталось дней: \(days)" : "Сертификат истёк"
         }
         if isLoggedIn && certName.isEmpty {
-            return "Signed in · no cert yet"
+            return "Apple ID подключён · нужен сертификат"
         }
-        return "Signed in"
+        return "Apple ID подключён"
     }
 
     var isCertHealthy: Bool {
-        guard isLoggedIn, !certName.isEmpty, let days = daysLeft else { return false }
-        return days > 1
+        guard isLoggedIn, !certName.isEmpty, let expiry = certExpires else { return false }
+        return expiry > Date()
     }
 
     /// Called after a real SideSign authentication succeeds.
